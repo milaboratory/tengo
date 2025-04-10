@@ -1336,6 +1336,89 @@ func TestCompilerSetImportExt_extension_name_validation(t *testing.T) {
 	}
 }
 
+func TestCompiler_ReplaceBuiltinModule(t *testing.T) {
+	sharedValues1 := map[string]int{}
+	sharedValues2 := map[string]int{}
+
+	createSetter := func(vals map[string]int) map[string]tengo.Object {
+		return map[string]tengo.Object{
+			"set": &tengo.UserFunction{
+				Value: func(args ...tengo.Object) (tengo.Object, error) {
+					n, _ := tengo.ToString(args[0])
+					i, _ := tengo.ToInt64(args[1])
+					vals[n] = int(i)
+					return nil, nil
+				},
+			},
+		}
+	}
+
+	checkValues := func(vals map[string]int, name string, base int) {
+		require.Equal(t, base, vals["direct"], fmt.Sprintf("unexpected value in %s['direct']", name))
+		require.Equal(t, base+1, vals["srcM1"], fmt.Sprintf("unexpected value in %s['srcM1']", name))
+		require.Equal(t, base+2, vals["srcM2"], fmt.Sprintf("unexpected value in %s['srcM2']", name))
+	}
+
+	srcM1 := `
+	m := import("setter")
+	export { set: m.set }
+	`
+
+	srcM2 := `
+	m := import("m1")
+	export { set: m.set }
+	`
+
+	code := `
+	ss := import("setter")
+	m1 := import("m1")
+	m2 := import("m2")
+
+	ss.set("direct", value)
+	m1.set("srcM1", value+1) // should update shared value under <setter> once again (src module shares builtin module instance)
+	m2.set("srcM2", value+2) // should again update the same value (nested src modules share the same builtin module instance)
+	`
+
+	script := tengo.NewScript([]byte(code))
+
+	// set values
+	err := script.Add("value", 0)
+	require.NoError(t, err, "failed to set value in script")
+
+	modules := stdlib.GetModuleMap()
+	modules.AddBuiltinModule("setter", createSetter(sharedValues1))
+	modules.AddSourceModule("m1", []byte(srcM1))
+	modules.AddSourceModule("m2", []byte(srcM2))
+	script.SetImports(modules)
+
+	compiled, err := script.Compile()
+	require.NoError(t, err, "failed to compile script")
+
+	// Check original script uses builtin module it got at start
+	compiled.Set("value", 10)
+	err = compiled.Run()
+
+	require.NoError(t, err, "failed to run original compiled script")
+	checkValues(sharedValues1, "sharedValues1", 10)
+
+	// Check cloned script uses new builtin module after replacement
+	clone := compiled.Clone()
+	clone.Set("value", 20)
+	clone.ReplaceBuiltinModule("setter", createSetter(sharedValues2))
+	err = clone.Run()
+
+	require.NoError(t, err, "failed to run cloned compiled script")
+	checkValues(sharedValues2, "sharedValues2", 20)
+
+	// Check original script still uses old builtin module
+	compiled.Set("value", 30)
+	err = compiled.Run()
+
+	require.NoError(t, err, "failed to run original compiled script")
+	checkValues(sharedValues1, "sharedValues1", 30)
+	checkValues(sharedValues2, "sharedValues2", 20)
+}
+
 func concatInsts(instructions ...[]byte) []byte {
 	var concat []byte
 	for _, i := range instructions {
