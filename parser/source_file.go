@@ -26,7 +26,6 @@ func (p SourceFilePos) IsValid() bool {
 //	line                valid position without file name and no column (column == 0)
 //	file                invalid position with file name
 //	-                   invalid position without file name
-//
 func (p SourceFilePos) String() string {
 	s := p.Filename
 	if p.IsValid() {
@@ -56,6 +55,13 @@ func NewFileSet() *SourceFileSet {
 	return &SourceFileSet{
 		Base: 1, // 0 == NoPos
 	}
+}
+
+func (s *SourceFileSet) Size() (size int64) {
+	for _, f := range s.Files {
+		size += int64(f.Size)
+	}
+	return size
 }
 
 // AddFile adds a new file in the file set.

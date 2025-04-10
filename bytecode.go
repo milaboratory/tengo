@@ -16,6 +16,10 @@ type Bytecode struct {
 	Constants    []Object
 }
 
+func (b *Bytecode) Size() int64 {
+	return b.MainFunction.Size() + b.FileSet.Size() + int64(len(b.Constants))
+}
+
 // Encode writes Bytecode data to the writer.
 func (b *Bytecode) Encode(w io.Writer) error {
 	enc := gob.NewEncoder(w)

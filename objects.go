@@ -587,6 +587,10 @@ func (o *CompiledFunction) String() string {
 	return "<compiled-function>"
 }
 
+func (o *CompiledFunction) Size() int64 {
+	return int64(len(o.Instructions) + len(o.SourceMap) + len(o.Free))
+}
+
 // Copy returns a copy of the type.
 func (o *CompiledFunction) Copy() Object {
 	return &CompiledFunction{
