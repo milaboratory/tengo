@@ -2,7 +2,8 @@ name: release
 on:
   push:
     tags:
-      - '*'
+      - 'never'
+
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
