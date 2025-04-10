@@ -246,6 +246,13 @@ func (c *Compiled) RunContext(ctx context.Context) (err error) {
 	return
 }
 
+func (c *Compiled) Size() int64 {
+	c.lock.RLock()
+	defer c.lock.RUnlock()
+
+	return c.bytecode.Size() + int64(len(c.globalIndexes)+len(c.globals))
+}
+
 // Clone creates a new copy of Compiled. Cloned copies are safe for concurrent
 // use by multiple goroutines.
 func (c *Compiled) Clone() *Compiled {

@@ -16,6 +16,10 @@ type Bytecode struct {
 	Constants    []Object
 }
 
+func (b *Bytecode) Size() int64 {
+	return b.MainFunction.Size() + b.FileSet.Size() + int64(len(b.Constants))
+}
+
 func (b *Bytecode) Clone() *Bytecode {
 	return &Bytecode{
 		FileSet:      b.FileSet,
