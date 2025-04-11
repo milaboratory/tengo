@@ -1484,7 +1484,7 @@ func TestCompiler_ConcurrentParallelExecution(t *testing.T) {
 	srcWithConstructor := `
     m := import("builtin")
 
-	globalModuleVariable := m.get().Value + 20 // should update after replace builtin module
+	globalModuleVariable := m.get().Value + 20 
     export { 
         get: func() { 
             return globalModuleVariable
@@ -1507,20 +1507,60 @@ func TestCompiler_ConcurrentParallelExecution(t *testing.T) {
 	}
 	`
 
+	singleton := `
+	localState := 0
+	export {
+		get: func() {
+			return localState
+		},
+		set: func(v) {
+			localState = v
+		}
+	}
+	`
+	object := `
+	export {
+		newObject: func() {
+			localState := 0
+			return {
+				get: func() {
+					return localState
+				},
+				set: func(v) {
+					localState = v
+				}
+			}
+		}
+	}
+	`
+
 	code := `
 	ss := import("builtin")
 	m1 := import("m1")
 	m2 := import("m2")
 	m3 := import("constructor")
 	m4 := import("transit")
+	singleton := import("singleton")
+	objectBuilder := import("object")
 
 	ss.set("direct", value1)
 	m1.set("out", value1+1) // should update shared value under <setter> once again (src module shares builtin module instance)
 	m2.set("out", value1+value2) // should again update the same value (nested src modules share the same builtin module instance)
-	m2.set("outFromConstructor", m3.get()) 
-	m2.set("outFromClosure", m3.calculate(value2)) 
-	m2.set("outGlobal", m3.global) 
-	m2.set("outGlobalTransit", m4.transitGlobal()) 
+	m2.set("outFromConstructor", m3.get()) // should update closure after replace builtin module
+	m2.set("outFromClosure", m3.calculate(value2))  // should update global in closure module variable after change builtin module
+	m2.set("outGlobal", m3.global)  // should update global variable after change builtin module
+	m2.set("outGlobalTransit", m4.transitGlobal()) // should update global variable in module after rebuild builtin module
+	m2.set("singleton", func() {
+		state := singleton.get()
+		state = state + 1
+		singleton.set(state)
+		return singleton.get()
+	}()) // should update global variable in module after rebuild builtin module
+	m2.set("object", func() {
+		obj := objectBuilder.newObject()
+		obj.set(1)
+		return obj.get()
+	}()) // should reset after update builtin module
 	`
 
 	script := tengo.NewScript([]byte(code))
@@ -1537,6 +1577,8 @@ func TestCompiler_ConcurrentParallelExecution(t *testing.T) {
 	modules.AddSourceModule("m2", []byte(srcM2))
 	modules.AddSourceModule("transit", []byte(transitModule))
 	modules.AddSourceModule("constructor", []byte(srcWithConstructor))
+	modules.AddSourceModule("singleton", []byte(singleton))
+	modules.AddSourceModule("object", []byte(object))
 	script.SetImports(modules)
 
 	precompiled, err := script.Compile()
@@ -1563,6 +1605,8 @@ func TestCompiler_ConcurrentParallelExecution(t *testing.T) {
 			require.Equal(t, 2*i+20, localMap["outFromClosure"], fmt.Sprintf("closure i: %d", i))
 			require.Equal(t, i+20, localMap["outGlobal"], fmt.Sprintf("global i: %d", i))
 			require.Equal(t, i+20, localMap["outGlobalTransit"], fmt.Sprintf("transit i: %d", i))
+			require.Equal(t, 1, localMap["singleton"], fmt.Sprintf("singleton i: %d", i))
+			require.Equal(t, 1, localMap["object"], fmt.Sprintf("object i: %d", i))
 			require.Equal(t, base, localMap["direct"])
 		}()
 	}
