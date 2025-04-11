@@ -16,6 +16,8 @@ type Bytecode struct {
 	Constants    []Object
 }
 
+// Size of the bytecode in bytes
+// (as much as we can calculate it without reflection and black magic)
 func (b *Bytecode) Size() int64 {
 	return b.MainFunction.Size() + b.FileSet.Size() + int64(len(b.Constants))
 }

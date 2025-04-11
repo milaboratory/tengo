@@ -244,6 +244,8 @@ func (c *Compiled) RunContext(ctx context.Context) (err error) {
 	return
 }
 
+// Size of compiled script in bytes
+// (as much as we can calculate it without reflection and black magic)
 func (c *Compiled) Size() int64 {
 	c.lock.RLock()
 	defer c.lock.RUnlock()
