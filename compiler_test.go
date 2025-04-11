@@ -5,6 +5,7 @@ import (
 	"io/ioutil"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/d5/tengo/v2"
@@ -1310,20 +1311,48 @@ func TestCompilerSetImportExt_extension_name_validation(t *testing.T) {
 		requireErr bool
 		msgFail    string
 	}{
-		{[]string{".tengo"}, []string{".tengo"}, false,
-			"well-formed extension should not return an error"},
-		{[]string{""}, []string{".tengo"}, true,
-			"empty extension name should return an error"},
-		{[]string{"foo"}, []string{".tengo"}, true,
-			"name without dot prefix should return an error"},
-		{[]string{"foo.bar"}, []string{".tengo"}, true,
-			"malformed extension should return an error"},
-		{[]string{"foo."}, []string{".tengo"}, true,
-			"malformed extension should return an error"},
-		{[]string{".mshk"}, []string{".mshk"}, false,
-			"name with dot prefix should be added"},
-		{[]string{".foo", ".bar"}, []string{".foo", ".bar"}, false,
-			"it should replace instead of appending"},
+		{
+			[]string{".tengo"},
+			[]string{".tengo"},
+			false,
+			"well-formed extension should not return an error",
+		},
+		{
+			[]string{""},
+			[]string{".tengo"},
+			true,
+			"empty extension name should return an error",
+		},
+		{
+			[]string{"foo"},
+			[]string{".tengo"},
+			true,
+			"name without dot prefix should return an error",
+		},
+		{
+			[]string{"foo.bar"},
+			[]string{".tengo"},
+			true,
+			"malformed extension should return an error",
+		},
+		{
+			[]string{"foo."},
+			[]string{".tengo"},
+			true,
+			"malformed extension should return an error",
+		},
+		{
+			[]string{".mshk"},
+			[]string{".mshk"},
+			false,
+			"name with dot prefix should be added",
+		},
+		{
+			[]string{".foo", ".bar"},
+			[]string{".foo", ".bar"},
+			false,
+			"it should replace instead of appending",
+		},
 	} {
 		err := c.SetImportFileExt(test.extensions...)
 		if test.requireErr {
@@ -1417,6 +1446,128 @@ func TestCompiler_ReplaceBuiltinModule(t *testing.T) {
 	require.NoError(t, err, "failed to run original compiled script")
 	checkValues(sharedValues1, "sharedValues1", 30)
 	checkValues(sharedValues2, "sharedValues2", 20)
+}
+
+func TestCompiler_ConcurrentParallelExecution(t *testing.T) {
+	sharedValues := map[string]int{}
+
+	createBuiltin := func(vals map[string]int, tengoMapValue int64) map[string]tengo.Object {
+		return map[string]tengo.Object{
+			"set": &tengo.UserFunction{
+				Value: func(args ...tengo.Object) (tengo.Object, error) {
+					n, _ := tengo.ToString(args[0])
+					i, _ := tengo.ToInt64(args[1])
+					vals[n] = int(i)
+					return nil, nil
+				},
+			},
+			"get": &tengo.UserFunction{
+				Value: func(args ...tengo.Object) (tengo.Object, error) {
+					return &tengo.Map{Value: map[string]tengo.Object{
+						"Value": &tengo.Int{Value: tengoMapValue},
+					}}, nil
+				},
+			},
+		}
+	}
+
+	srcM1 := `
+	m := import("builtin")
+	export { set: m.set }
+	`
+
+	srcM2 := `
+	m := import("m1")
+	export { set: m.set }
+	`
+
+	srcWithConstructor := `
+    m := import("builtin")
+
+	globalModuleVariable := m.get().Value + 20 // should update after replace builtin module
+    export { 
+        get: func() { 
+            return globalModuleVariable
+        },
+        calculate: func(v) {
+            return v + globalModuleVariable
+        },
+		global: globalModuleVariable
+    }
+	`
+
+	transitModule := `
+	m := import("constructor")
+	global := m.get()
+
+	export {
+		transitGlobal: func() {
+			return global
+		}
+	}
+	`
+
+	code := `
+	ss := import("builtin")
+	m1 := import("m1")
+	m2 := import("m2")
+	m3 := import("constructor")
+	m4 := import("transit")
+
+	ss.set("direct", value1)
+	m1.set("out", value1+1) // should update shared value under <setter> once again (src module shares builtin module instance)
+	m2.set("out", value1+value2) // should again update the same value (nested src modules share the same builtin module instance)
+	m2.set("outFromConstructor", m3.get()) 
+	m2.set("outFromClosure", m3.calculate(value2)) 
+	m2.set("outGlobal", m3.global) 
+	m2.set("outGlobalTransit", m4.transitGlobal()) 
+	`
+
+	script := tengo.NewScript([]byte(code))
+
+	// set values
+	err := script.Add("value1", 0)
+	require.NoError(t, err, "failed to set value in script")
+	err = script.Add("value2", 0)
+	require.NoError(t, err, "failed to set value in script")
+
+	modules := stdlib.GetModuleMap()
+	modules.AddBuiltinModule("builtin", createBuiltin(sharedValues, 10))
+	modules.AddSourceModule("m1", []byte(srcM1))
+	modules.AddSourceModule("m2", []byte(srcM2))
+	modules.AddSourceModule("transit", []byte(transitModule))
+	modules.AddSourceModule("constructor", []byte(srcWithConstructor))
+	script.SetImports(modules)
+
+	precompiled, err := script.Compile()
+	require.NoError(t, err, "failed to compile script")
+
+	const goroutineCount = 1_000
+	wg := sync.WaitGroup{}
+	for i := 0; i < goroutineCount; i++ {
+		i := i
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			localMap := make(map[string]int)
+			const base = 20
+			script := precompiled.Clone()
+			script.ReplaceBuiltinModule("builtin", createBuiltin(localMap, int64(i)))
+			script.Set("value1", base)
+			script.Set("value2", i)
+			err := script.Run()
+			require.NoError(t, err)
+			require.Equal(t, base+i, localMap["out"], fmt.Sprintf("i: %d", i))
+			require.Equal(t, 20+i, localMap["outFromConstructor"], fmt.Sprintf("constructor i: %d", i))
+			require.Equal(t, 2*i+20, localMap["outFromClosure"], fmt.Sprintf("closure i: %d", i))
+			require.Equal(t, i+20, localMap["outGlobal"], fmt.Sprintf("global i: %d", i))
+			require.Equal(t, i+20, localMap["outGlobalTransit"], fmt.Sprintf("transit i: %d", i))
+			require.Equal(t, base, localMap["direct"])
+		}()
+	}
+
+	wg.Wait()
 }
 
 func concatInsts(instructions ...[]byte) []byte {
