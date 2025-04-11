@@ -26,7 +26,6 @@ func (p SourceFilePos) IsValid() bool {
 //	line                valid position without file name and no column (column == 0)
 //	file                invalid position with file name
 //	-                   invalid position without file name
-//
 func (p SourceFilePos) String() string {
 	s := p.Filename
 	if p.IsValid() {

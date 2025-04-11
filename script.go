@@ -268,6 +268,11 @@ func (c *Compiled) Clone() *Compiled {
 	return clone
 }
 
+// ReplaceBuiltinModule replaces a builtin module with a new one.
+// This is helpful for concurrent script execution, when builtin module does not support
+// concurrency and you need to provide custom module instance for each script clone.
+//
+// Remember to call .Clone() to get an instance of the script safe for concurrent use.
 func (c *Compiled) ReplaceBuiltinModule(name string, attrs map[string]Object) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
