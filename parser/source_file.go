@@ -57,6 +57,7 @@ func NewFileSet() *SourceFileSet {
 	}
 }
 
+// Size of all files in this set in bytes.
 func (s *SourceFileSet) Size() (size int64) {
 	for _, f := range s.Files {
 		size += int64(f.Size)

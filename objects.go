@@ -587,6 +587,8 @@ func (o *CompiledFunction) String() string {
 	return "<compiled-function>"
 }
 
+// Size of the compiled function in bytes
+// (as much as we can calculate it without reflection and black magic)
 func (o *CompiledFunction) Size() int64 {
 	return int64(len(o.Instructions) + len(o.SourceMap) + len(o.Free))
 }

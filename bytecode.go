@@ -16,10 +16,17 @@ type Bytecode struct {
 	Constants    []Object
 }
 
+// Size of the bytecode in bytes
+// (as much as we can calculate it without reflection and black magic)
 func (b *Bytecode) Size() int64 {
 	return b.MainFunction.Size() + b.FileSet.Size() + int64(len(b.Constants))
 }
 
+// Clone of the bytecode suitable for modification without affecting the original.
+// New Bytecode itself is independent, but all the contents of it are still shared
+// with the original.
+// The only thing that is not shared with the original is Constants slice, as it might be updated
+// by ReplaceBuiltinModule(), which should be safe for clone.
 func (b *Bytecode) Clone() *Bytecode {
 	return &Bytecode{
 		FileSet:      b.FileSet,
