@@ -320,8 +320,9 @@ func (o *Bool) GobEncode() (b []byte, err error) {
 // BuiltinFunction represents a builtin function.
 type BuiltinFunction struct {
 	ObjectImpl
-	Name  string
-	Value CallableFunc
+	Name      string
+	Value     CallableFunc
+	stackArgs bool
 }
 
 // TypeName returns the name of the type.
@@ -979,7 +980,7 @@ func (o *ImmutableMap) Equals(x Object) bool {
 
 // Iterate creates an immutable map iterator.
 func (o *ImmutableMap) Iterate() Iterator {
-	var keys []string
+	keys := make([]string, 0, len(o.Value))
 	for k := range o.Value {
 		keys = append(keys, k)
 	}
@@ -1259,7 +1260,7 @@ func (o *Map) IndexSet(index, value Object) (err error) {
 
 // Iterate creates a map iterator.
 func (o *Map) Iterate() Iterator {
-	var keys []string
+	keys := make([]string, 0, len(o.Value))
 	for k := range o.Value {
 		keys = append(keys, k)
 	}
