@@ -127,6 +127,13 @@ var builtinFuncs = []*BuiltinFunction{
 	},
 }
 
+func init() {
+	// none of the builtins above keep a reference to their args slice
+	for _, fn := range builtinFuncs {
+		fn.stackArgs = true
+	}
+}
+
 // GetAllBuiltinFunctions returns all builtin function objects.
 func GetAllBuiltinFunctions() []*BuiltinFunction {
 	return append([]*BuiltinFunction{}, builtinFuncs...)

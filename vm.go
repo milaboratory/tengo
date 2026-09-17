@@ -652,7 +652,13 @@ func (v *VM) run() {
 				v.sp = v.sp - numArgs + callee.NumLocals
 			} else {
 				var args []Object
-				args = append(args, v.stack[v.sp-numArgs:v.sp]...)
+				if bf, ok := value.(*BuiltinFunction); ok && bf.stackArgs {
+					// the builtin does not retain args, and nothing touches
+					// the operand stack until it returns
+					args = v.stack[v.sp-numArgs : v.sp]
+				} else {
+					args = append(args, v.stack[v.sp-numArgs:v.sp]...)
+				}
 				ret, e := value.Call(args...)
 				v.sp -= numArgs + 1
 
