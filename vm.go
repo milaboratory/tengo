@@ -95,7 +95,7 @@ func (v *VM) Run() (err error) {
 }
 
 func (v *VM) run() {
-	for atomic.LoadInt64(&v.aborting) == 0 {
+	for {
 		v.ip++
 
 		switch v.curInsts[v.ip] {
@@ -241,6 +241,9 @@ func (v *VM) run() {
 				v.ip = pos - 1
 			}
 		case parser.OpJump:
+			if atomic.LoadInt64(&v.aborting) != 0 {
+				return
+			}
 			pos := int(v.curInsts[v.ip+4]) | int(v.curInsts[v.ip+3])<<8 | int(v.curInsts[v.ip+2])<<16 | int(v.curInsts[v.ip+1])<<24
 			v.ip = pos - 1
 		case parser.OpSetGlobal:
@@ -539,6 +542,9 @@ func (v *VM) run() {
 				return
 			}
 		case parser.OpCall:
+			if atomic.LoadInt64(&v.aborting) != 0 {
+				return
+			}
 			numArgs := int(v.curInsts[v.ip+1])
 			spread := int(v.curInsts[v.ip+2])
 			v.ip += 2
