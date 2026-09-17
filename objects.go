@@ -322,6 +322,9 @@ type BuiltinFunction struct {
 	ObjectImpl
 	Name  string
 	Value CallableFunc
+	// stackArgs marks functions known not to retain their args slice; the VM
+	// then passes a window of its operand stack instead of a copy.
+	stackArgs bool
 }
 
 // TypeName returns the name of the type.
@@ -1006,7 +1009,7 @@ func (o *ImmutableMap) Equals(x Object) bool {
 
 // Iterate creates an immutable map iterator.
 func (o *ImmutableMap) Iterate() Iterator {
-	var keys []string
+	keys := make([]string, 0, len(o.Value))
 	for k := range o.Value {
 		keys = append(keys, k)
 	}
@@ -1288,7 +1291,7 @@ func (o *Map) IndexSet(index, value Object) (err error) {
 
 // Iterate creates a map iterator.
 func (o *Map) Iterate() Iterator {
-	var keys []string
+	keys := make([]string, 0, len(o.Value))
 	for k := range o.Value {
 		keys = append(keys, k)
 	}
