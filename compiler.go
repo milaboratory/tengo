@@ -31,10 +31,21 @@ type sourceMapEntry struct {
 	src parser.Pos
 }
 
-func buildSourceMap(entries []sourceMapEntry) map[int]parser.Pos {
-	m := make(map[int]parser.Pos, len(entries))
-	for _, e := range entries {
-		m[e.pos] = e.src
+// buildSourceMap run-length encodes per-instruction source positions
+// (sorted by instruction position) into a SourceMap.
+func buildSourceMap(entries []sourceMapEntry) SourceMap {
+	n := 0
+	for i, e := range entries {
+		if i == 0 || e.src != entries[i-1].src {
+			n++
+		}
+	}
+	m := SourceMap{IP: make([]int32, 0, n), Src: make([]int32, 0, n)}
+	for i, e := range entries {
+		if i == 0 || e.src != entries[i-1].src {
+			m.IP = append(m.IP, int32(e.pos))
+			m.Src = append(m.Src, int32(e.src))
+		}
 	}
 	return m
 }
@@ -1098,7 +1109,7 @@ func (c *Compiler) currentInstructions() []byte {
 	return c.scopes[c.scopeIndex].Instructions
 }
 
-func (c *Compiler) currentSourceMap() map[int]parser.Pos {
+func (c *Compiler) currentSourceMap() SourceMap {
 	return buildSourceMap(c.scopes[c.scopeIndex].sourceMap)
 }
 
@@ -1116,7 +1127,7 @@ func (c *Compiler) enterScope() {
 
 func (c *Compiler) leaveScope() (
 	instructions []byte,
-	sourceMap map[int]parser.Pos,
+	sourceMap SourceMap,
 ) {
 	instructions = c.currentInstructions()
 	sourceMap = c.currentSourceMap()

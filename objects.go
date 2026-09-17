@@ -574,7 +574,7 @@ type CompiledFunction struct {
 	NumLocals     int // number of local variables (including function parameters)
 	NumParameters int
 	VarArgs       bool
-	SourceMap     map[int]parser.Pos
+	SourceMap     SourceMap
 	Free          []*ObjectPtr
 	// IsModule marks the main function of an imported source module; the VM
 	// evaluates it at most once per run and reuses the exported value.
@@ -593,7 +593,7 @@ func (o *CompiledFunction) String() string {
 // Size of the compiled function in bytes
 // (as much as we can calculate it without reflection and black magic)
 func (o *CompiledFunction) Size() int64 {
-	return int64(len(o.Instructions) + len(o.SourceMap) + len(o.Free))
+	return int64(len(o.Instructions) + o.SourceMap.Size() + 8*len(o.Free))
 }
 
 // Copy returns a copy of the type.
@@ -616,13 +616,38 @@ func (o *CompiledFunction) Equals(_ Object) bool {
 
 // SourcePos returns the source position of the instruction at ip.
 func (o *CompiledFunction) SourcePos(ip int) parser.Pos {
-	for ip >= 0 {
-		if p, ok := o.SourceMap[ip]; ok {
-			return p
+	return o.SourceMap.Pos(ip)
+}
+
+// SourceMap maps instruction positions of a CompiledFunction to source
+// positions. It is run-length encoded: entry i applies to every instruction
+// position from IP[i] up to (not including) IP[i+1]. IP is sorted.
+type SourceMap struct {
+	IP  []int32
+	Src []int32
+}
+
+// Pos returns the source position of the instruction at ip, or parser.NoPos.
+func (m SourceMap) Pos(ip int) parser.Pos {
+	// binary search for the last entry with IP <= ip
+	lo, hi := 0, len(m.IP)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if int(m.IP[mid]) <= ip {
+			lo = mid + 1
+		} else {
+			hi = mid
 		}
-		ip--
 	}
-	return parser.NoPos
+	if lo == 0 {
+		return parser.NoPos
+	}
+	return parser.Pos(m.Src[lo-1])
+}
+
+// Size returns the approximate memory footprint of the map in bytes.
+func (m SourceMap) Size() int {
+	return 8 * len(m.IP)
 }
 
 // CanCall returns whether the Object can be Called.
