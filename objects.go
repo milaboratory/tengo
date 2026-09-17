@@ -1028,6 +1028,31 @@ type Int struct {
 	Value int64
 }
 
+const (
+	smallIntMin = -128
+	smallIntMax = 1023
+)
+
+// smallInts holds preallocated Int objects for common values so that
+// arithmetic on small numbers does not allocate. Int values are never
+// mutated in place, so sharing them is safe.
+var smallInts [smallIntMax - smallIntMin + 1]Int
+
+func init() {
+	for i := range smallInts {
+		smallInts[i].Value = int64(i) + smallIntMin
+	}
+}
+
+// NewInt returns an Int object holding v, reusing a preallocated object for
+// small values.
+func NewInt(v int64) *Int {
+	if v >= smallIntMin && v <= smallIntMax {
+		return &smallInts[v-smallIntMin]
+	}
+	return &Int{Value: v}
+}
+
 func (o *Int) String() string {
 	return strconv.FormatInt(o.Value, 10)
 }
@@ -1045,70 +1070,37 @@ func (o *Int) BinaryOp(op token.Token, rhs Object) (Object, error) {
 		switch op {
 		case token.Add:
 			r := o.Value + rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Sub:
 			r := o.Value - rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Mul:
 			r := o.Value * rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Quo:
 			r := o.Value / rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Rem:
 			r := o.Value % rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.And:
 			r := o.Value & rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Or:
 			r := o.Value | rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Xor:
 			r := o.Value ^ rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.AndNot:
 			r := o.Value &^ rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Shl:
 			r := o.Value << uint64(rhs.Value)
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Shr:
 			r := o.Value >> uint64(rhs.Value)
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Less:
 			if o.Value < rhs.Value {
 				return TrueValue, nil
