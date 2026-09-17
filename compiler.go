@@ -82,6 +82,7 @@ type Compiler struct {
 	scopeIndex      int
 	modules         ModuleGetter
 	compiledModules map[string]*CompiledFunction
+	moduleSymbols   *SymbolTable // builtins-only table shared by all modules (root compiler)
 	allowFileImport bool
 	loops           []*loop
 	loopIndex       int
@@ -1036,14 +1037,8 @@ func (c *Compiler) compileModule(
 		return nil, err
 	}
 
-	// inherit builtin functions
-	symbolTable := NewSymbolTable()
-	for _, sym := range c.symbolTable.BuiltinSymbols() {
-		symbolTable.DefineBuiltin(sym.Index, sym.Name)
-	}
-
-	// no global scope for the module
-	symbolTable = symbolTable.Fork(false)
+	// inherit builtin functions; no global scope for the module
+	symbolTable := c.moduleSymbolTable().Fork(false)
 
 	// compile module
 	moduleCompiler := c.fork(modFile, modulePath, symbolTable, isFile)
@@ -1058,6 +1053,22 @@ func (c *Compiler) compileModule(
 	compiledFunc.IsModule = true
 	c.storeCompiledModule(modulePath, compiledFunc)
 	return compiledFunc, nil
+}
+
+// moduleSymbolTable returns a symbol table holding only the builtin symbols.
+// It is created once per root compiler and shared by every module compiled
+// under it; modules fork it and never define symbols in it.
+func (c *Compiler) moduleSymbolTable() *SymbolTable {
+	if c.parent != nil {
+		return c.parent.moduleSymbolTable()
+	}
+	if c.moduleSymbols == nil {
+		c.moduleSymbols = NewSymbolTable()
+		for _, sym := range c.symbolTable.BuiltinSymbols() {
+			c.moduleSymbols.DefineBuiltin(sym.Index, sym.Name)
+		}
+	}
+	return c.moduleSymbols
 }
 
 func (c *Compiler) loadCompiledModule(
