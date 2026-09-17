@@ -1028,6 +1028,7 @@ func (c *Compiler) compileModule(
 	moduleCompiler.optimizeFunc(node)
 	compiledFunc := moduleCompiler.Bytecode().MainFunction
 	compiledFunc.NumLocals = symbolTable.MaxSymbols()
+	compiledFunc.IsModule = true
 	c.storeCompiledModule(modulePath, compiledFunc)
 	return compiledFunc, nil
 }

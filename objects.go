@@ -576,6 +576,9 @@ type CompiledFunction struct {
 	VarArgs       bool
 	SourceMap     map[int]parser.Pos
 	Free          []*ObjectPtr
+	// IsModule marks the main function of an imported source module; the VM
+	// evaluates it at most once per run and reuses the exported value.
+	IsModule bool
 }
 
 // TypeName returns the name of the type.
@@ -599,6 +602,7 @@ func (o *CompiledFunction) Copy() Object {
 		Instructions:  append([]byte{}, o.Instructions...),
 		NumLocals:     o.NumLocals,
 		NumParameters: o.NumParameters,
+		IsModule:      o.IsModule,
 		VarArgs:       o.VarArgs,
 		Free:          append([]*ObjectPtr{}, o.Free...), // DO NOT Copy() of elements; these are variable pointers
 	}

@@ -32,6 +32,7 @@ type VM struct {
 	maxAllocs   int64
 	allocs      int64
 	err         error
+	modules     map[*CompiledFunction]Object // memoized module exports for this run
 }
 
 // NewVM creates a VM.
@@ -73,6 +74,7 @@ func (v *VM) Run() (err error) {
 	v.framesIndex = 1
 	v.ip = -1
 	v.allocs = v.maxAllocs + 1
+	v.modules = nil
 
 	v.run()
 	atomic.StoreInt64(&v.aborting, 0)
@@ -571,6 +573,14 @@ func (v *VM) run() {
 			}
 
 			if callee, ok := value.(*CompiledFunction); ok {
+				if callee.IsModule {
+					if cached, ok := v.modules[callee]; ok {
+						v.sp -= numArgs + 1
+						v.stack[v.sp] = cached
+						v.sp++
+						continue
+					}
+				}
 				if callee.VarArgs {
 					// if the closure is variadic,
 					// roll up all variadic parameters into an array
@@ -674,6 +684,12 @@ func (v *VM) run() {
 				retVal = v.stack[v.sp-1]
 			} else {
 				retVal = UndefinedValue
+			}
+			if fn := v.curFrame.fn; fn.IsModule {
+				if v.modules == nil {
+					v.modules = make(map[*CompiledFunction]Object)
+				}
+				v.modules[fn] = retVal
 			}
 			//v.sp--
 			v.framesIndex--
