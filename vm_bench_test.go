@@ -103,6 +103,14 @@ for i := 0; i < 200000; i++ {
 	}
 }
 out := c`,
+	"MapIter": `
+m := {}
+for i := 0; i < 50; i++ { m["key" + string(i)] = i }
+c := 0
+for k := 0; k < 4000; k++ {
+	for key, v in m { c += v }
+}
+out := c`,
 	"StdlibCalls": `
 text := import("text")
 math := import("math")
@@ -116,7 +124,7 @@ out := c`,
 func BenchmarkVM(b *testing.B) {
 	for _, name := range []string{"ArithLoop", "FloatLoop", "CompareLoop", "Fib",
 		"ClosureCalls", "MapAccess", "MethodCalls", "ArrayIter", "ArrayIndex",
-		"StringOps", "Builtins", "StdlibCalls"} {
+		"StringOps", "Builtins", "StdlibCalls", "MapIter"} {
 		src := vmBenchScripts[name]
 		b.Run(name, func(b *testing.B) {
 			s := tengo.NewScript([]byte(src))
