@@ -32,6 +32,7 @@ type VM struct {
 	maxAllocs   int64
 	allocs      int64
 	err         error
+	modules     map[*CompiledFunction]Object // memoized module exports for this run
 }
 
 // NewVM creates a VM.
@@ -73,6 +74,7 @@ func (v *VM) Run() (err error) {
 	v.framesIndex = 1
 	v.ip = -1
 	v.allocs = v.maxAllocs + 1
+	v.modules = nil
 
 	v.run()
 	atomic.StoreInt64(&v.aborting, 0)
@@ -95,7 +97,11 @@ func (v *VM) Run() (err error) {
 }
 
 func (v *VM) run() {
-	for atomic.LoadInt64(&v.aborting) == 0 {
+	// The abort flag is checked only on jumps and calls: any non-terminating
+	// execution must repeatedly take a backward jump or perform a call, so this
+	// is enough to stop it, and it keeps the atomic load off the straight-line
+	// dispatch path.
+	for {
 		v.ip++
 
 		switch v.curInsts[v.ip] {
@@ -241,6 +247,9 @@ func (v *VM) run() {
 				v.ip = pos - 1
 			}
 		case parser.OpJump:
+			if atomic.LoadInt64(&v.aborting) != 0 {
+				return
+			}
 			pos := int(v.curInsts[v.ip+4]) | int(v.curInsts[v.ip+3])<<8 | int(v.curInsts[v.ip+2])<<16 | int(v.curInsts[v.ip+1])<<24
 			v.ip = pos - 1
 		case parser.OpSetGlobal:
@@ -539,6 +548,9 @@ func (v *VM) run() {
 				return
 			}
 		case parser.OpCall:
+			if atomic.LoadInt64(&v.aborting) != 0 {
+				return
+			}
 			numArgs := int(v.curInsts[v.ip+1])
 			spread := int(v.curInsts[v.ip+2])
 			v.ip += 2
@@ -571,6 +583,14 @@ func (v *VM) run() {
 			}
 
 			if callee, ok := value.(*CompiledFunction); ok {
+				if callee.IsModule {
+					if cached, ok := v.modules[callee]; ok {
+						v.sp -= numArgs + 1
+						v.stack[v.sp] = cached
+						v.sp++
+						continue
+					}
+				}
 				if callee.VarArgs {
 					// if the closure is variadic,
 					// roll up all variadic parameters into an array
@@ -632,7 +652,13 @@ func (v *VM) run() {
 				v.sp = v.sp - numArgs + callee.NumLocals
 			} else {
 				var args []Object
-				args = append(args, v.stack[v.sp-numArgs:v.sp]...)
+				if bf, ok := value.(*BuiltinFunction); ok && bf.stackArgs {
+					// the builtin does not retain args, and nothing touches
+					// the operand stack until it returns
+					args = v.stack[v.sp-numArgs : v.sp]
+				} else {
+					args = append(args, v.stack[v.sp-numArgs:v.sp]...)
+				}
 				ret, e := value.Call(args...)
 				v.sp -= numArgs + 1
 
@@ -674,6 +700,12 @@ func (v *VM) run() {
 				retVal = v.stack[v.sp-1]
 			} else {
 				retVal = UndefinedValue
+			}
+			if fn := v.curFrame.fn; fn.IsModule {
+				if v.modules == nil {
+					v.modules = make(map[*CompiledFunction]Object)
+				}
+				v.modules[fn] = retVal
 			}
 			//v.sp--
 			v.framesIndex--

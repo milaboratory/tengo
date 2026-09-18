@@ -322,6 +322,9 @@ type BuiltinFunction struct {
 	ObjectImpl
 	Name  string
 	Value CallableFunc
+	// stackArgs marks functions known not to retain their args slice; the VM
+	// then passes a window of its operand stack instead of a copy.
+	stackArgs bool
 }
 
 // TypeName returns the name of the type.
@@ -574,8 +577,11 @@ type CompiledFunction struct {
 	NumLocals     int // number of local variables (including function parameters)
 	NumParameters int
 	VarArgs       bool
-	SourceMap     map[int]parser.Pos
+	SourceMap     SourceMap
 	Free          []*ObjectPtr
+	// IsModule marks the main function of an imported source module; the VM
+	// evaluates it at most once per run and reuses the exported value.
+	IsModule bool
 }
 
 // TypeName returns the name of the type.
@@ -590,7 +596,7 @@ func (o *CompiledFunction) String() string {
 // Size of the compiled function in bytes
 // (as much as we can calculate it without reflection and black magic)
 func (o *CompiledFunction) Size() int64 {
-	return int64(len(o.Instructions) + len(o.SourceMap) + len(o.Free))
+	return int64(len(o.Instructions) + o.SourceMap.Size() + 8*len(o.Free))
 }
 
 // Copy returns a copy of the type.
@@ -599,6 +605,7 @@ func (o *CompiledFunction) Copy() Object {
 		Instructions:  append([]byte{}, o.Instructions...),
 		NumLocals:     o.NumLocals,
 		NumParameters: o.NumParameters,
+		IsModule:      o.IsModule,
 		VarArgs:       o.VarArgs,
 		Free:          append([]*ObjectPtr{}, o.Free...), // DO NOT Copy() of elements; these are variable pointers
 	}
@@ -612,13 +619,38 @@ func (o *CompiledFunction) Equals(_ Object) bool {
 
 // SourcePos returns the source position of the instruction at ip.
 func (o *CompiledFunction) SourcePos(ip int) parser.Pos {
-	for ip >= 0 {
-		if p, ok := o.SourceMap[ip]; ok {
-			return p
+	return o.SourceMap.Pos(ip)
+}
+
+// SourceMap maps instruction positions of a CompiledFunction to source
+// positions. It is run-length encoded: entry i applies to every instruction
+// position from IP[i] up to (not including) IP[i+1]. IP is sorted.
+type SourceMap struct {
+	IP  []int32
+	Src []int32
+}
+
+// Pos returns the source position of the instruction at ip, or parser.NoPos.
+func (m SourceMap) Pos(ip int) parser.Pos {
+	// binary search for the last entry with IP <= ip
+	lo, hi := 0, len(m.IP)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if int(m.IP[mid]) <= ip {
+			lo = mid + 1
+		} else {
+			hi = mid
 		}
-		ip--
 	}
-	return parser.NoPos
+	if lo == 0 {
+		return parser.NoPos
+	}
+	return parser.Pos(m.Src[lo-1])
+}
+
+// Size returns the approximate memory footprint of the map in bytes.
+func (m SourceMap) Size() int {
+	return 8 * len(m.IP)
 }
 
 // CanCall returns whether the Object can be Called.
@@ -977,7 +1009,7 @@ func (o *ImmutableMap) Equals(x Object) bool {
 
 // Iterate creates an immutable map iterator.
 func (o *ImmutableMap) Iterate() Iterator {
-	var keys []string
+	keys := make([]string, 0, len(o.Value))
 	for k := range o.Value {
 		keys = append(keys, k)
 	}
@@ -999,6 +1031,31 @@ type Int struct {
 	Value int64
 }
 
+const (
+	smallIntMin = -128
+	smallIntMax = 1023
+)
+
+// smallInts holds preallocated Int objects for common values so that
+// arithmetic on small numbers does not allocate. Int values are never
+// mutated in place, so sharing them is safe.
+var smallInts [smallIntMax - smallIntMin + 1]Int
+
+func init() {
+	for i := range smallInts {
+		smallInts[i].Value = int64(i) + smallIntMin
+	}
+}
+
+// NewInt returns an Int object holding v, reusing a preallocated object for
+// small values.
+func NewInt(v int64) *Int {
+	if v >= smallIntMin && v <= smallIntMax {
+		return &smallInts[v-smallIntMin]
+	}
+	return &Int{Value: v}
+}
+
 func (o *Int) String() string {
 	return strconv.FormatInt(o.Value, 10)
 }
@@ -1016,70 +1073,37 @@ func (o *Int) BinaryOp(op token.Token, rhs Object) (Object, error) {
 		switch op {
 		case token.Add:
 			r := o.Value + rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Sub:
 			r := o.Value - rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Mul:
 			r := o.Value * rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Quo:
 			r := o.Value / rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Rem:
 			r := o.Value % rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.And:
 			r := o.Value & rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Or:
 			r := o.Value | rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Xor:
 			r := o.Value ^ rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.AndNot:
 			r := o.Value &^ rhs.Value
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Shl:
 			r := o.Value << uint64(rhs.Value)
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Shr:
 			r := o.Value >> uint64(rhs.Value)
-			if r == o.Value {
-				return o, nil
-			}
-			return &Int{Value: r}, nil
+			return NewInt(r), nil
 		case token.Less:
 			if o.Value < rhs.Value {
 				return TrueValue, nil
@@ -1267,7 +1291,7 @@ func (o *Map) IndexSet(index, value Object) (err error) {
 
 // Iterate creates a map iterator.
 func (o *Map) Iterate() Iterator {
-	var keys []string
+	keys := make([]string, 0, len(o.Value))
 	for k := range o.Value {
 		keys = append(keys, k)
 	}

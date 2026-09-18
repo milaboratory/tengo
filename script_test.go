@@ -665,3 +665,17 @@ data["b"] = 2
 	require.Equal(t, 1001, clone.Get("count").Int())
 	require.Equal(t, 2, len(clone.Get("data").Map()))
 }
+
+func TestCompiled_ModuleStateResetBetweenRuns(t *testing.T) {
+	mods := tengo.NewModuleMap()
+	mods.AddSourceModule("mod1",
+		[]byte(`n := 0; export {inc: func() { n++; return n }}`))
+	s := tengo.NewScript([]byte(`import("mod1").inc(); out := import("mod1").inc()`))
+	s.SetImports(mods)
+	c, err := s.Compile()
+	require.NoError(t, err)
+	for i := 0; i < 3; i++ {
+		require.NoError(t, c.Run())
+		require.Equal(t, int64(2), c.Get("out").Value())
+	}
+}

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/d5/tengo/v2"
+	"github.com/d5/tengo/v2/parser"
 	"github.com/d5/tengo/v2/require"
 	"github.com/d5/tengo/v2/token"
 )
@@ -733,4 +734,21 @@ func boolValue(b bool) tengo.Object {
 		return tengo.TrueValue
 	}
 	return tengo.FalseValue
+}
+
+func TestSourceMap_Pos(t *testing.T) {
+	// entries cover [0,3) -> 10, [3,8) -> 20, [8,...) -> 30
+	m := tengo.SourceMap{IP: []int32{0, 3, 8}, Src: []int32{10, 20, 30}}
+	require.Equal(t, parser.Pos(10), m.Pos(0))
+	require.Equal(t, parser.Pos(10), m.Pos(2))
+	require.Equal(t, parser.Pos(20), m.Pos(3))
+	require.Equal(t, parser.Pos(20), m.Pos(7))
+	require.Equal(t, parser.Pos(30), m.Pos(8))
+	require.Equal(t, parser.Pos(30), m.Pos(1000))
+	require.Equal(t, parser.NoPos, m.Pos(-1))
+	require.Equal(t, parser.NoPos, tengo.SourceMap{}.Pos(0))
+	// first entry not at 0: positions before it have no source position
+	m = tengo.SourceMap{IP: []int32{5}, Src: []int32{7}}
+	require.Equal(t, parser.NoPos, m.Pos(4))
+	require.Equal(t, parser.Pos(7), m.Pos(5))
 }

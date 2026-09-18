@@ -1,6 +1,7 @@
 package tengo
 
 import (
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -19,7 +20,34 @@ import (
 type compilationScope struct {
 	Instructions []byte
 	SymbolInit   map[string]bool
-	SourceMap    map[int]parser.Pos
+	// sourceMap records the source position of every emitted instruction in
+	// emission order; it is materialized into a map only when the scope's
+	// function is finalized.
+	sourceMap []sourceMapEntry
+}
+
+type sourceMapEntry struct {
+	pos int
+	src parser.Pos
+}
+
+// buildSourceMap run-length encodes per-instruction source positions
+// (sorted by instruction position) into a SourceMap.
+func buildSourceMap(entries []sourceMapEntry) SourceMap {
+	n := 0
+	for i, e := range entries {
+		if i == 0 || e.src != entries[i-1].src {
+			n++
+		}
+	}
+	m := SourceMap{IP: make([]int32, 0, n), Src: make([]int32, 0, n)}
+	for i, e := range entries {
+		if i == 0 || e.src != entries[i-1].src {
+			m.IP = append(m.IP, int32(e.pos))
+			m.Src = append(m.Src, int32(e.src))
+		}
+	}
+	return m
 }
 
 // loop represents a loop construct that the compiler uses to track the current
@@ -54,6 +82,7 @@ type Compiler struct {
 	scopeIndex      int
 	modules         ModuleGetter
 	compiledModules map[string]*CompiledFunction
+	moduleSymbols   *SymbolTable // builtins-only table shared by all modules (root compiler)
 	allowFileImport bool
 	loops           []*loop
 	loopIndex       int
@@ -71,7 +100,6 @@ func NewCompiler(
 ) *Compiler {
 	mainScope := compilationScope{
 		SymbolInit: make(map[string]bool),
-		SourceMap:  make(map[int]parser.Pos),
 	}
 
 	// symbol table
@@ -1009,14 +1037,8 @@ func (c *Compiler) compileModule(
 		return nil, err
 	}
 
-	// inherit builtin functions
-	symbolTable := NewSymbolTable()
-	for _, sym := range c.symbolTable.BuiltinSymbols() {
-		symbolTable.DefineBuiltin(sym.Index, sym.Name)
-	}
-
-	// no global scope for the module
-	symbolTable = symbolTable.Fork(false)
+	// inherit builtin functions; no global scope for the module
+	symbolTable := c.moduleSymbolTable().Fork(false)
 
 	// compile module
 	moduleCompiler := c.fork(modFile, modulePath, symbolTable, isFile)
@@ -1028,8 +1050,25 @@ func (c *Compiler) compileModule(
 	moduleCompiler.optimizeFunc(node)
 	compiledFunc := moduleCompiler.Bytecode().MainFunction
 	compiledFunc.NumLocals = symbolTable.MaxSymbols()
+	compiledFunc.IsModule = true
 	c.storeCompiledModule(modulePath, compiledFunc)
 	return compiledFunc, nil
+}
+
+// moduleSymbolTable returns a symbol table holding only the builtin symbols.
+// It is created once per root compiler and shared by every module compiled
+// under it; modules fork it and never define symbols in it.
+func (c *Compiler) moduleSymbolTable() *SymbolTable {
+	if c.parent != nil {
+		return c.parent.moduleSymbolTable()
+	}
+	if c.moduleSymbols == nil {
+		c.moduleSymbols = NewSymbolTable()
+		for _, sym := range c.symbolTable.BuiltinSymbols() {
+			c.moduleSymbols.DefineBuiltin(sym.Index, sym.Name)
+		}
+	}
+	return c.moduleSymbols
 }
 
 func (c *Compiler) loadCompiledModule(
@@ -1081,14 +1120,13 @@ func (c *Compiler) currentInstructions() []byte {
 	return c.scopes[c.scopeIndex].Instructions
 }
 
-func (c *Compiler) currentSourceMap() map[int]parser.Pos {
-	return c.scopes[c.scopeIndex].SourceMap
+func (c *Compiler) currentSourceMap() SourceMap {
+	return buildSourceMap(c.scopes[c.scopeIndex].sourceMap)
 }
 
 func (c *Compiler) enterScope() {
 	scope := compilationScope{
 		SymbolInit: make(map[string]bool),
-		SourceMap:  make(map[int]parser.Pos),
 	}
 	c.scopes = append(c.scopes, scope)
 	c.scopeIndex++
@@ -1100,7 +1138,7 @@ func (c *Compiler) enterScope() {
 
 func (c *Compiler) leaveScope() (
 	instructions []byte,
-	sourceMap map[int]parser.Pos,
+	sourceMap SourceMap,
 ) {
 	instructions = c.currentInstructions()
 	sourceMap = c.currentSourceMap()
@@ -1192,29 +1230,35 @@ func (c *Compiler) optimizeFunc(node parser.Node) {
 	// any instructions between RETURN and the function end
 	// or instructions between RETURN and jump target position
 	// are considered as unreachable.
+	scope := &c.scopes[c.scopeIndex]
+	insts := scope.Instructions
+	endPos := len(insts)
 
 	// pass 1. identify all jump destinations
-	dsts := make(map[int]bool)
-	iterateInstructions(c.scopes[c.scopeIndex].Instructions,
+	dsts := make([]bool, endPos+1)
+	iterateInstructions(insts,
 		func(pos int, opcode parser.Opcode, operands []int) bool {
 			switch opcode {
 			case parser.OpJump, parser.OpJumpFalsy,
 				parser.OpAndJump, parser.OpOrJump:
-				dsts[operands[0]] = true
+				if d := operands[0]; d >= 0 && d <= endPos {
+					dsts[d] = true
+				}
 			}
 			return true
 		})
 
 	// pass 2. eliminate dead code
-	var newInsts []byte
-	posMap := make(map[int]int) // old position to new position
-	var dstIdx int
+	newInsts := make([]byte, 0, endPos)
+	posMap := make([]int, endPos+1) // old position to new position
+	for i := range posMap {
+		posMap[i] = -1
+	}
 	var deadCode bool
-	iterateInstructions(c.scopes[c.scopeIndex].Instructions,
+	iterateInstructions(insts,
 		func(pos int, opcode parser.Opcode, operands []int) bool {
 			switch {
 			case dsts[pos]:
-				dstIdx++
 				deadCode = false
 			case opcode == parser.OpReturn:
 				if deadCode {
@@ -1226,34 +1270,33 @@ func (c *Compiler) optimizeFunc(node parser.Node) {
 			}
 			posMap[pos] = len(newInsts)
 			newInsts = append(newInsts,
-				MakeInstruction(opcode, operands...)...)
+				insts[pos:pos+instructionLen[opcode]]...)
 			return true
 		})
 
 	// pass 3. update jump positions
 	var lastOp parser.Opcode
 	var appendReturn bool
-	endPos := len(c.scopes[c.scopeIndex].Instructions)
-	newEndPost := len(newInsts)
+	newEndPos := len(newInsts)
 
 	iterateInstructions(newInsts,
 		func(pos int, opcode parser.Opcode, operands []int) bool {
 			switch opcode {
 			case parser.OpJump, parser.OpJumpFalsy, parser.OpAndJump,
 				parser.OpOrJump:
-				newDst, ok := posMap[operands[0]]
-				if ok {
-					copy(newInsts[pos:],
-						MakeInstruction(opcode, newDst))
-				} else if endPos == operands[0] {
+				oldDst := operands[0]
+				var newDst int
+				if oldDst >= 0 && oldDst <= endPos && posMap[oldDst] >= 0 {
+					newDst = posMap[oldDst]
+				} else if oldDst == endPos {
 					// there's a jump instruction that jumps to the end of
 					// function compiler should append "return".
-					copy(newInsts[pos:],
-						MakeInstruction(opcode, newEndPost))
+					newDst = newEndPos
 					appendReturn = true
 				} else {
-					panic(fmt.Errorf("invalid jump position: %d", newDst))
+					panic(fmt.Errorf("invalid jump position: %d", oldDst))
 				}
+				binary.BigEndian.PutUint32(newInsts[pos+1:], uint32(newDst))
 			}
 			lastOp = opcode
 			return true
@@ -1262,16 +1305,15 @@ func (c *Compiler) optimizeFunc(node parser.Node) {
 		appendReturn = true
 	}
 
-	// pass 4. update source map
-	newSourceMap := make(map[int]parser.Pos)
-	for pos, srcPos := range c.scopes[c.scopeIndex].SourceMap {
-		newPos, ok := posMap[pos]
-		if ok {
-			newSourceMap[newPos] = srcPos
+	// pass 4. update source map (in place; only kept instructions survive)
+	kept := scope.sourceMap[:0]
+	for _, e := range scope.sourceMap {
+		if e.pos <= endPos && posMap[e.pos] >= 0 {
+			kept = append(kept, sourceMapEntry{pos: posMap[e.pos], src: e.src})
 		}
 	}
-	c.scopes[c.scopeIndex].Instructions = newInsts
-	c.scopes[c.scopeIndex].SourceMap = newSourceMap
+	scope.Instructions = newInsts
+	scope.sourceMap = kept
 
 	// append "return"
 	if appendReturn {
@@ -1289,9 +1331,10 @@ func (c *Compiler) emit(
 		filePos = node.Pos()
 	}
 
-	inst := MakeInstruction(opcode, operands...)
-	pos := c.addInstruction(inst)
-	c.scopes[c.scopeIndex].SourceMap[pos] = filePos
+	scope := &c.scopes[c.scopeIndex]
+	pos := len(scope.Instructions)
+	scope.Instructions = appendInstruction(scope.Instructions, opcode, operands...)
+	scope.sourceMap = append(scope.sourceMap, sourceMapEntry{pos: pos, src: filePos})
 	if c.trace != nil {
 		c.printTrace(fmt.Sprintf("EMIT  %s",
 			FormatInstructions(
@@ -1358,9 +1401,10 @@ func iterateInstructions(
 	b []byte,
 	fn func(pos int, opcode parser.Opcode, operands []int) bool,
 ) {
+	var buf [4]int
 	for i := 0; i < len(b); i++ {
 		numOperands := parser.OpcodeOperands[b[i]]
-		operands, read := parser.ReadOperands(numOperands, b[i+1:])
+		operands, read := parser.ReadOperandsInto(buf[:0], numOperands, b[i+1:])
 		if !fn(i, b[i], operands) {
 			break
 		}

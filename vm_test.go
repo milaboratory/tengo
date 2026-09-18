@@ -2595,6 +2595,25 @@ func TestBuiltin(t *testing.T) {
 	expectRun(t, `math := import("math"); out = math.abs(-1.0)`, m, 1.0)
 }
 
+func TestUserModules_ImportedOnce(t *testing.T) {
+	// a source module is evaluated once per run; every import site of the same
+	// module (directly or through other modules) sees the same instance
+	counter := `n := 0; export {inc: func() { n++; return n }}`
+	expectRun(t, `m1 := import("mod1"); m1.inc(); out = import("mod1").inc()`,
+		Opts().Module("mod1", counter), 2)
+	expectRun(t, `import("mod1").inc(); out = import("mod2")()`,
+		Opts().Module("mod1", counter).
+			Module("mod2", `a := import("mod1"); export a.inc`), 2)
+	expectRun(t, `import("mod2")(); import("mod3")(); out = import("mod1").inc()`,
+		Opts().Module("mod1", counter).
+			Module("mod2", `export import("mod1").inc`).
+			Module("mod3", `export import("mod1").inc`), 3)
+	// modules with no export still run only once
+	expectRun(t, `import("mod2"); import("mod2"); out = import("mod1").inc()`,
+		Opts().Module("mod1", counter).
+			Module("mod2", `import("mod1").inc()`), 2)
+}
+
 func TestUserModules(t *testing.T) {
 	// export none
 	expectRun(t, `out = import("mod1")`,
