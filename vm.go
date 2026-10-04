@@ -435,14 +435,12 @@ func (v *VM) run() {
 			globalIndex := int(insts[ip-1]) | int(insts[ip-2])<<8
 			numSelectors := int(insts[ip])
 
-			// selectors and RHS value
-			selectors := make([]Object, numSelectors)
-			for i := 0; i < numSelectors; i++ {
-				selectors[i] = stack[sp-numSelectors+i]
-			}
+			// selectors and RHS value; the selectors are read in place from
+			// the operand stack, nothing writes to it before they are popped
+			selectors := stack[sp-numSelectors : sp]
 			val := stack[sp-numSelectors-1]
-			sp -= numSelectors + 1
 			e := indexAssign(globals[globalIndex], val, selectors)
+			sp -= numSelectors + 1
 			if e != nil {
 				v.err = e
 				goto done
@@ -458,8 +456,9 @@ func (v *VM) run() {
 			numElements := int(insts[ip]) | int(insts[ip-1])<<8
 
 			var elements []Object
-			for i := sp - numElements; i < sp; i++ {
-				elements = append(elements, stack[i])
+			if numElements > 0 {
+				elements = make([]Object, numElements)
+				copy(elements, stack[sp-numElements:sp])
 			}
 			sp -= numElements
 
@@ -475,7 +474,7 @@ func (v *VM) run() {
 		case parser.OpMap:
 			ip += 2
 			numElements := int(insts[ip]) | int(insts[ip-1])<<8
-			kv := make(map[string]Object, numElements)
+			kv := make(map[string]Object, numElements/2)
 			for i := sp - numElements; i < sp; i += 2 {
 				key := stack[i]
 				value := stack[i+1]
@@ -830,18 +829,15 @@ func (v *VM) run() {
 			numSelectors := int(insts[ip+2])
 			ip += 2
 
-			// selectors and RHS value
-			selectors := make([]Object, numSelectors)
-			for i := 0; i < numSelectors; i++ {
-				selectors[i] = stack[sp-numSelectors+i]
-			}
+			// selectors and RHS value, read in place from the operand stack
+			selectors := stack[sp-numSelectors : sp]
 			val := stack[sp-numSelectors-1]
-			sp -= numSelectors + 1
 			dst := stack[curFrame.basePointer+localIndex]
 			if obj, ok := dst.(*ObjectPtr); ok {
 				dst = *obj.Value
 			}
 			e := indexAssign(dst, val, selectors)
+			sp -= numSelectors + 1
 			if e != nil {
 				v.err = e
 				goto done
@@ -932,15 +928,12 @@ func (v *VM) run() {
 			freeIndex := int(insts[ip-1])
 			numSelectors := int(insts[ip])
 
-			// selectors and RHS value
-			selectors := make([]Object, numSelectors)
-			for i := 0; i < numSelectors; i++ {
-				selectors[i] = stack[sp-numSelectors+i]
-			}
+			// selectors and RHS value, read in place from the operand stack
+			selectors := stack[sp-numSelectors : sp]
 			val := stack[sp-numSelectors-1]
-			sp -= numSelectors + 1
 			e := indexAssign(*curFrame.freeVars[freeIndex].Value,
 				val, selectors)
+			sp -= numSelectors + 1
 			if e != nil {
 				v.err = e
 				goto done

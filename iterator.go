@@ -99,12 +99,12 @@ func (i *BytesIterator) Next() bool {
 
 // Key returns the key or index value of the current element.
 func (i *BytesIterator) Key() Object {
-	return &Int{Value: int64(i.i - 1)}
+	return NewInt(int64(i.i - 1))
 }
 
 // Value returns the value of the current element.
 func (i *BytesIterator) Value() Object {
-	return &Int{Value: int64(i.v[i.i-1])}
+	return NewInt(int64(i.v[i.i-1]))
 }
 
 // MapIterator represents an iterator for the map.
@@ -200,7 +200,7 @@ func (i *StringIterator) Next() bool {
 
 // Key returns the key or index value of the current element.
 func (i *StringIterator) Key() Object {
-	return &Int{Value: int64(i.i - 1)}
+	return NewInt(int64(i.i - 1))
 }
 
 // Value returns the value of the current element.

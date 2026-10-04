@@ -160,11 +160,11 @@ func (o *Array) TypeName() string {
 }
 
 func (o *Array) String() string {
-	var elements []string
+	elements := make([]string, 0, len(o.Value))
 	for _, e := range o.Value {
 		elements = append(elements, e.String())
 	}
-	return fmt.Sprintf("[%s]", strings.Join(elements, ", "))
+	return "[" + strings.Join(elements, ", ") + "]"
 }
 
 // BinaryOp returns another object that is the result of a given binary
@@ -184,9 +184,9 @@ func (o *Array) BinaryOp(op token.Token, rhs Object) (Object, error) {
 
 // Copy returns a copy of the type.
 func (o *Array) Copy() Object {
-	var c []Object
-	for _, elem := range o.Value {
-		c = append(c, elem.Copy())
+	c := make([]Object, len(o.Value))
+	for i, elem := range o.Value {
+		c[i] = elem.Copy()
 	}
 	return &Array{Value: c}
 }
@@ -440,7 +440,7 @@ func (o *Bytes) IndexGet(index Object) (res Object, err error) {
 		res = UndefinedValue
 		return
 	}
-	res = &Int{Value: int64(o.Value[idxVal])}
+	res = NewInt(int64(o.Value[idxVal]))
 	return
 }
 
@@ -851,11 +851,11 @@ func (o *ImmutableArray) TypeName() string {
 }
 
 func (o *ImmutableArray) String() string {
-	var elements []string
+	elements := make([]string, 0, len(o.Value))
 	for _, e := range o.Value {
 		elements = append(elements, e.String())
 	}
-	return fmt.Sprintf("[%s]", strings.Join(elements, ", "))
+	return "[" + strings.Join(elements, ", ") + "]"
 }
 
 // BinaryOp returns another object that is the result of a given binary
@@ -872,9 +872,9 @@ func (o *ImmutableArray) BinaryOp(op token.Token, rhs Object) (Object, error) {
 
 // Copy returns a copy of the type.
 func (o *ImmutableArray) Copy() Object {
-	var c []Object
-	for _, elem := range o.Value {
-		c = append(c, elem.Copy())
+	c := make([]Object, len(o.Value))
+	for i, elem := range o.Value {
+		c[i] = elem.Copy()
 	}
 	return &Array{Value: c}
 }
@@ -957,7 +957,7 @@ func (o *ImmutableMap) String() string {
 
 // Copy returns a copy of the type.
 func (o *ImmutableMap) Copy() Object {
-	c := make(map[string]Object)
+	c := make(map[string]Object, len(o.Value))
 	for k, v := range o.Value {
 		c[k] = v.Copy()
 	}
@@ -1228,7 +1228,7 @@ func (o *Map) String() string {
 
 // Copy returns a copy of the type.
 func (o *Map) Copy() Object {
-	c := make(map[string]Object)
+	c := make(map[string]Object, len(o.Value))
 	for k, v := range o.Value {
 		c[k] = v.Copy()
 	}
@@ -1498,7 +1498,7 @@ func (o *Time) BinaryOp(op token.Token, rhs Object) (Object, error) {
 	case *Time:
 		switch op {
 		case token.Sub: // time - time => int (duration)
-			return &Int{Value: int64(o.Value.Sub(rhs.Value))}, nil
+			return NewInt(int64(o.Value.Sub(rhs.Value))), nil
 		case token.Less: // time < time => bool
 			if o.Value.Before(rhs.Value) {
 				return TrueValue, nil
