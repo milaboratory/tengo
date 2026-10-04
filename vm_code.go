@@ -152,17 +152,43 @@ func hasJump(op uint8) bool {
 // must not be shared between VMs running concurrently before its first use.
 func codeFor(fn *CompiledFunction) []instr {
 	if fn.code == nil {
-		fn.code = translate(fn.Instructions, fn.NumLocals)
+		var tr translator
+		fn.code = tr.translate(fn.Instructions, fn.NumLocals)
 	}
 	return fn.code
 }
 
+// translator holds scratch buffers that are reused when translating many
+// functions in a row (Bytecode.prepare); only the returned code is retained.
+type translator struct {
+	isTarget []bool
+	target   []bool
+	byteIdx  []int32
+	depthAt  []int32
+	start    []int32
+	remap    []int32
+	code     []instr
+	out      []instr
+}
+
+func growBool(buf []bool, n int) []bool {
+	if cap(buf) < n {
+		return make([]bool, n)
+	}
+	buf = buf[:n]
+	for i := range buf {
+		buf[i] = false
+	}
+	return buf
+}
+
 // translate converts stack bytecode into register-form instrs.
-func translate(insts []byte, numLocals int) []instr {
+func (tr *translator) translate(insts []byte, numLocals int) []instr {
 	var buf [4]int
 
 	// pass 1: jump targets, as offsets into insts
-	isTarget := make([]bool, len(insts)+1)
+	isTarget := growBool(tr.isTarget, len(insts)+1)
+	tr.isTarget = isTarget
 	for ip := 0; ip < len(insts); {
 		op := insts[ip]
 		if int(op) >= len(parser.OpcodeOperands) {
@@ -183,10 +209,12 @@ func translate(insts []byte, numLocals int) []instr {
 	// pass 2: one instr per opcode with static slots. byteIdx maps an
 	// offset in insts to the index of the instr emitted for it (or, for
 	// OpPop, which emits nothing, to the next one).
-	code := make([]instr, 0, len(insts)/2+1)
-	byteIdx := make([]int32, len(insts)+1)
+	code := tr.code[:0]
+	byteIdx := growInt32(tr.byteIdx, len(insts)+1)
+	tr.byteIdx = byteIdx
 	t := func(d int) int32 { return operand(kTemp, numLocals+d) }
-	scanDepth(insts, func(ip int, op byte, operands []int, depth int) {
+	tr.depthAt = growInt32(tr.depthAt, len(insts)+1)
+	scanDepth(insts, tr.depthAt, func(ip int, op byte, operands []int, depth int) {
 		byteIdx[ip] = int32(len(code))
 		if operands == nil {
 			code = append(code, instr{op: opInvalid, a: int32(op), pos: int32(ip)})
@@ -294,9 +322,11 @@ func translate(insts []byte, numLocals int) []instr {
 		code = append(code, in)
 	})
 	byteIdx[len(insts)] = int32(len(code))
+	tr.code = code
 
 	// jump targets per emitted instr
-	target := make([]bool, len(code)+1)
+	target := growBool(tr.target, len(code)+1)
+	tr.target = target
 	for off, is := range isTarget {
 		if is {
 			target[byteIdx[off]] = true
@@ -307,8 +337,8 @@ func translate(insts []byte, numLocals int) []instr {
 	// of pass-2 instrs starting at start[k]; a jump into that range lands on
 	// the output instr, so the range may contain a jump target only at an
 	// instr whose predecessors in the range are all loads it needs anyway.
-	out := make([]instr, 0, len(code))
-	start := make([]int32, 0, len(code))
+	out := tr.out[:0]
+	start := growInt32(tr.start, len(code))[:0]
 	for i := range code {
 		in := code[i]
 		first := int32(i)
@@ -334,8 +364,11 @@ func translate(insts []byte, numLocals int) []instr {
 		start = append(start, first)
 	}
 
+	tr.out, tr.start = out, start
+
 	// remap maps a pass-2 index to the output instr covering it
-	remap := make([]int32, len(code)+1)
+	remap := growInt32(tr.remap, len(code)+1)
+	tr.remap = remap
 	for k := range out {
 		end := len(code)
 		if k+1 < len(out) {
@@ -358,7 +391,10 @@ func translate(insts []byte, numLocals int) []instr {
 		}
 		specialize(&out[i])
 	}
-	return out
+	// only the exact-size result is retained
+	result := make([]instr, len(out))
+	copy(result, out)
+	return result
 }
 
 // isCompare reports whether tok is a comparison operator whose result feeds

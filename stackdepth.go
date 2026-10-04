@@ -40,14 +40,14 @@ func stackEffect(op byte, operands []int) int {
 // jump or a return, where the next instruction is only reachable by a jump
 // and takes the depth recorded by that jump (a ternary's else branch, for
 // instance, starts below where the then branch ended).
-func scanDepth(insts []byte, visit func(ip int, op byte, operands []int, depth int)) {
-	depthAt := make([]int, len(insts)+1)
+func scanDepth(insts []byte, depthBuf []int32, visit func(ip int, op byte, operands []int, depth int)) {
+	depthAt := growInt32(depthBuf, len(insts)+1)
 	for i := range depthAt {
 		depthAt[i] = -1
 	}
 	record := func(target, depth int) {
 		if target >= 0 && target <= len(insts) && depthAt[target] < 0 {
-			depthAt[target] = depth
+			depthAt[target] = int32(depth)
 		}
 	}
 	var buf [4]int
@@ -60,7 +60,7 @@ func scanDepth(insts []byte, visit func(ip int, op byte, operands []int, depth i
 			break // malformed; the VM reports the unknown opcode
 		}
 		if noFallthrough && depthAt[ip] >= 0 {
-			depth = depthAt[ip]
+			depth = int(depthAt[ip])
 		}
 		operands, width := parser.ReadOperandsInto(buf[:0],
 			parser.OpcodeOperands[op], insts[ip+1:])
@@ -83,7 +83,7 @@ func scanDepth(insts []byte, visit func(ip int, op byte, operands []int, depth i
 // uses above its locals.
 func maxStackDepth(insts []byte) int {
 	max := 0
-	scanDepth(insts, func(ip int, op byte, operands []int, depth int) {
+	scanDepth(insts, nil, func(ip int, op byte, operands []int, depth int) {
 		if operands == nil {
 			return
 		}
@@ -92,4 +92,13 @@ func maxStackDepth(insts []byte) int {
 		}
 	})
 	return max
+}
+
+// growInt32 returns buf resized to n elements, reallocating only when it is
+// too small. Contents are unspecified.
+func growInt32(buf []int32, n int) []int32 {
+	if cap(buf) < n {
+		return make([]int32, n)
+	}
+	return buf[:n]
 }

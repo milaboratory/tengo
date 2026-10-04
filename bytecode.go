@@ -44,10 +44,14 @@ func (b *Bytecode) prepare() {
 	if b.prepared {
 		return
 	}
-	codeFor(b.MainFunction)
+	var tr translator
+	if b.MainFunction.code == nil {
+		b.MainFunction.code = tr.translate(b.MainFunction.Instructions,
+			b.MainFunction.NumLocals)
+	}
 	for _, c := range b.Constants {
-		if fn, ok := c.(*CompiledFunction); ok {
-			codeFor(fn)
+		if fn, ok := c.(*CompiledFunction); ok && fn.code == nil {
+			fn.code = tr.translate(fn.Instructions, fn.NumLocals)
 		}
 	}
 	b.prepared = true
