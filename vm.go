@@ -14,6 +14,10 @@ type frame struct {
 	freeVars    []*ObjectPtr
 	ip          int
 	basePointer int
+	// discard is set when a tail call reused this frame for a call whose
+	// result the function body dropped (`f(x); return`). The function then
+	// returns undefined, whatever the final callee returns.
+	discard bool
 }
 
 // VM is a virtual machine that executes the bytecode compiled by Compiler.
@@ -733,9 +737,15 @@ func (v *VM) run() {
 				// test if it's tail-call
 				if callee == curFrame.fn { // recursion
 					nextOp := insts[ip+1]
-					if nextOp == parser.OpReturn ||
-						(nextOp == parser.OpPop &&
-							parser.OpReturn == insts[ip+2]) {
+					tail := nextOp == parser.OpReturn
+					if !tail && nextOp == parser.OpPop &&
+						parser.OpReturn == insts[ip+2] {
+						// the result is dropped and the function returns
+						// undefined; remember that for the final return
+						tail = true
+						curFrame.discard = true
+					}
+					if tail {
 						copy(stack[curFrame.basePointer:curFrame.basePointer+numArgs],
 							stack[sp-numArgs:sp])
 						sp -= numArgs + 1
@@ -755,6 +765,7 @@ func (v *VM) run() {
 				curFrame.fn = callee
 				curFrame.freeVars = callee.Free
 				curFrame.basePointer = sp - numArgs
+				curFrame.discard = false
 				insts = callee.Instructions
 				ip = -1
 				framesIndex++
@@ -821,7 +832,7 @@ func (v *VM) run() {
 		case parser.OpReturn:
 			ip++
 			var retVal Object
-			if int(insts[ip]) == 1 {
+			if int(insts[ip]) == 1 && !curFrame.discard {
 				retVal = stack[sp-1]
 			} else {
 				retVal = UndefinedValue

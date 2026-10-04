@@ -3394,6 +3394,46 @@ func TestIntDivisionByZero(t *testing.T) {
 	expectRun(t, `out = 7 % 2`, nil, 1)
 }
 
+func TestTailCallDiscardedResult(t *testing.T) {
+	// a call whose result is dropped before an implicit return is still a
+	// tail call, but the function must return undefined, not the callee's
+	// value
+	expectRun(t, `
+f := func(n) {
+	if n == 0 { return 42 }
+	f(n-1)
+}
+out = f(3)`, nil, tengo.UndefinedValue)
+	expectRun(t, `
+f := func(n) {
+	if n == 0 { return 42 }
+	f(n-1)
+	return
+}
+out = f(3)`, nil, tengo.UndefinedValue)
+	// mixed: a value-returning tail call after a dropped one
+	expectRun(t, `
+f := func(n) {
+	if n == 0 { return 42 }
+	if n == 2 { f(n-1); return }
+	return f(n-1)
+}
+out = f(3)`, nil, tengo.UndefinedValue)
+	expectRun(t, `
+f := func(n) {
+	if n == 0 { return 42 }
+	return f(n-1)
+}
+out = f(3)`, nil, 42)
+	// deep enough that it must still be a tail call
+	expectRun(t, `
+f := func(n) {
+	if n == 0 { return 42 }
+	f(n-1)
+}
+out = f(5000)`, nil, tengo.UndefinedValue)
+}
+
 func TestVMStackOverflow(t *testing.T) {
 	expectError(t, `f := func() { return f() + 1 }; f()`,
 		nil, "stack overflow")
