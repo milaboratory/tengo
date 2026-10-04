@@ -3383,6 +3383,17 @@ out = x.at([1, 2, 3], 0)
 `, Opts().Stdlib(), 1)
 }
 
+func TestIntDivisionByZero(t *testing.T) {
+	// a Go integer division by zero would panic the host process
+	expectError(t, `x := 0; y := 1 / x`, nil, "integer division by zero")
+	expectError(t, `x := 0; y := 1 % x`, nil, "integer division by zero")
+	expectError(t, `f := func(a, b) { return a % b }; y := f(7, 0)`,
+		nil, "integer division by zero")
+	expectRun(t, `x := 0; out = 1.0 / x`, nil, math.Inf(1))
+	expectRun(t, `out = 7 / 2`, nil, 3)
+	expectRun(t, `out = 7 % 2`, nil, 1)
+}
+
 func TestVMStackOverflow(t *testing.T) {
 	expectError(t, `f := func() { return f() + 1 }; f()`,
 		nil, "stack overflow")

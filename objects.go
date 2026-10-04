@@ -1086,9 +1086,15 @@ func (o *Int) BinaryOp(op token.Token, rhs Object) (Object, error) {
 			r := o.Value * rhs.Value
 			return NewInt(r), nil
 		case token.Quo:
+			if rhs.Value == 0 {
+				return nil, ErrDivisionByZero
+			}
 			r := o.Value / rhs.Value
 			return NewInt(r), nil
 		case token.Rem:
+			if rhs.Value == 0 {
+				return nil, ErrDivisionByZero
+			}
 			r := o.Value % rhs.Value
 			return NewInt(r), nil
 		case token.And:
