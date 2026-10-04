@@ -11,9 +11,9 @@ import (
 // stack depth before each instruction is static (compiler output is
 // structured and every opcode has a fixed stack effect), so the slot an
 // instruction reads or writes is known at translation time and no stack
-// pointer is maintained while running. Operands carry a kind (stack slot,
-// local, constant, global, ...) so that loads can later be folded into the
-// instructions consuming them.
+// pointer is maintained while running. Operands carry a kind, which lets a
+// peephole pass fold loads into their consumers and stores into producers,
+// so `s += i * 3` runs as one instruction instead of five.
 //
 // The serialized bytecode format and the compiler are unchanged; the
 // translation is an execution detail and is rebuilt whenever Instructions
@@ -303,12 +303,49 @@ func translate(insts []byte, numLocals int) []instr {
 		}
 	}
 
-	// no fusion yet: one instr per opcode
-	out := code
-	remap := make([]int32, len(code)+1)
-	for i := range remap {
-		remap[i] = int32(i)
+	// pass 3: peephole fusion. Each output instr covers a contiguous range
+	// of pass-2 instrs starting at start[k]; a jump into that range lands on
+	// the output instr, so the range may contain a jump target only at an
+	// instr whose predecessors in the range are all loads it needs anyway.
+	out := make([]instr, 0, len(code))
+	start := make([]int32, 0, len(code))
+	for i := range code {
+		in := code[i]
+		first := int32(i)
+		if !target[i] && len(out) > 0 {
+			if fuse(&out[len(out)-1], &in) {
+				continue
+			}
+			// fold the loads feeding in, most recent first. Once a load
+			// that is a jump target has been folded, stop: a jump to it
+			// must not re-execute an earlier load.
+			absorbedTarget := false
+			for len(out) > 0 && !absorbedTarget {
+				last := len(out) - 1
+				if !drop(&out[last], &in) {
+					break
+				}
+				first = start[last]
+				absorbedTarget = target[first]
+				out, start = out[:last], start[:last]
+			}
+		}
+		out = append(out, in)
+		start = append(start, first)
 	}
+
+	// remap maps a pass-2 index to the output instr covering it
+	remap := make([]int32, len(code)+1)
+	for k := range out {
+		end := len(code)
+		if k+1 < len(out) {
+			end = int(start[k+1])
+		}
+		for j := int(start[k]); j < end; j++ {
+			remap[j] = int32(k)
+		}
+	}
+	remap[len(code)] = int32(len(out))
 
 	// resolve jump targets: byte offset -> pass-2 index -> final index
 	for i := range out {
@@ -322,4 +359,83 @@ func translate(insts []byte, numLocals int) []instr {
 		specialize(&out[i])
 	}
 	return out
+}
+
+// isCompare reports whether tok is a comparison operator whose result feeds
+// a conditional jump without being materialized.
+func isCompare(tok token.Token) bool {
+	switch tok {
+	case token.Less, token.Greater, token.LessEq, token.GreaterEq:
+		return true
+	}
+	return false
+}
+
+// fuse tries to absorb in (which immediately follows last and is not a jump
+// target) into last, rewriting last in place. It returns true on success.
+func fuse(last, in *instr) bool {
+	switch in.op {
+	case opMove:
+		// a store of the temp that last produced: retarget last
+		if isTemp(in.b) && !isTemp(in.a) {
+			switch last.op {
+			case opMove, opBinary, opEqual, opNotEqual, opLNot,
+				opBComplement, opMinus, opIndex:
+				if last.a == in.b {
+					last.a = in.a
+					return true
+				}
+			}
+		}
+	case opJumpFalsy:
+		if isTemp(in.b) && last.a == in.b {
+			switch last.op {
+			case opMove:
+				// jump on a loaded value directly
+				*last = instr{op: opJumpFalsy, a: in.a, b: last.b, pos: in.pos}
+				return true
+			case opBinary:
+				if isCompare(last.tok) {
+					*last = instr{op: opBinaryJF, tok: last.tok, a: in.a,
+						b: last.b, c: last.c, pos: last.pos}
+					return true
+				}
+			case opEqual:
+				*last = instr{op: opEqualJF, a: in.a, b: last.b, c: last.c,
+					pos: last.pos}
+				return true
+			case opNotEqual:
+				*last = instr{op: opNotEqualJF, a: in.a, b: last.b,
+					c: last.c, pos: last.pos}
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// drop tries to fold last, a load into a temp, into in, which consumes that
+// temp as a source. On success in is rewritten and last is to be discarded.
+func drop(last, in *instr) bool {
+	if last.op != opMove || !isTemp(last.a) {
+		return false
+	}
+	switch in.op {
+	case opBinary, opEqual, opNotEqual, opIndex:
+		// the right operand is loaded last; the left one right before it
+		if in.c == last.a {
+			in.c = last.b
+			return true
+		}
+		if in.b == last.a && !isTemp(in.c) {
+			in.b = last.b
+			return true
+		}
+	case opLNot, opBComplement, opMinus, opReturn:
+		if in.b == last.a {
+			in.b = last.b
+			return true
+		}
+	}
+	return false
 }
