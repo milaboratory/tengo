@@ -788,9 +788,13 @@ func (v *VM) run() {
 						ret, e = fn.Value(args...)
 					}
 				case *UserFunction:
-					args := make([]Object, numArgs)
-					copy(args, stack[sp-numArgs:sp])
-					ret, e = fn.Value(args...)
+					if fn.StackArgs {
+						ret, e = fn.Value(stack[sp-numArgs : sp]...)
+					} else {
+						args := make([]Object, numArgs)
+						copy(args, stack[sp-numArgs:sp])
+						ret, e = fn.Value(args...)
+					}
 				default:
 					args := make([]Object, numArgs)
 					copy(args, stack[sp-numArgs:sp])

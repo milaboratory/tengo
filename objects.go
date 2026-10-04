@@ -1620,6 +1620,11 @@ type UserFunction struct {
 	ObjectImpl
 	Name  string
 	Value CallableFunc
+	// StackArgs declares that Value never keeps a reference to its args
+	// slice after returning. The VM then passes a window of its operand
+	// stack instead of a copy of the arguments. Leave it false for functions
+	// that store args or return closures over it.
+	StackArgs bool
 }
 
 // TypeName returns the name of the type.
@@ -1633,7 +1638,7 @@ func (o *UserFunction) String() string {
 
 // Copy returns a copy of the type.
 func (o *UserFunction) Copy() Object {
-	return &UserFunction{Value: o.Value, Name: o.Name}
+	return &UserFunction{Value: o.Value, Name: o.Name, StackArgs: o.StackArgs}
 }
 
 // Equals returns true if the value of the type is equal to the value of
