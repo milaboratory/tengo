@@ -33,6 +33,43 @@ type VM struct {
 	allocs      int64
 	err         error
 	modules     map[*CompiledFunction]Object // memoized module exports for this run
+	ints        []Int                        // bump-allocated Int slab, see newInt
+	floats      []Float                      // bump-allocated Float slab, see newFloat
+}
+
+// numSlabSize is the number of Int or Float objects carved out of one heap
+// allocation by the arithmetic fast paths. Boxing every intermediate number
+// is the dominant cost of numeric scripts, and a bump allocator is an order
+// of magnitude cheaper than mallocgc per object. The trade-off is retention:
+// a slab stays alive while any number in it is referenced, so a script that
+// keeps one number out of every numSlabSize it computes retains the whole
+// slab. Int and Float are 8 bytes, so a slab is 256 bytes.
+const numSlabSize = 32
+
+// newInt returns an Int holding x, from the shared small-int table or the
+// VM's slab. Ints are never mutated after creation, so sharing is safe.
+func (v *VM) newInt(x int64) *Int {
+	if x >= smallIntMin && x <= smallIntMax {
+		return &smallInts[x-smallIntMin]
+	}
+	if len(v.ints) == 0 {
+		v.ints = make([]Int, numSlabSize)
+	}
+	p := &v.ints[0]
+	p.Value = x
+	v.ints = v.ints[1:]
+	return p
+}
+
+// newFloat returns a Float holding x from the VM's slab.
+func (v *VM) newFloat(x float64) *Float {
+	if len(v.floats) == 0 {
+		v.floats = make([]Float, numSlabSize)
+	}
+	p := &v.floats[0]
+	p.Value = x
+	v.floats = v.floats[1:]
+	return p
 }
 
 // NewVM creates a VM.
@@ -146,18 +183,18 @@ func (v *VM) run() {
 				if r, ok := right.(*Int); ok {
 					switch tok {
 					case token.Add:
-						res = NewInt(l.Value + r.Value)
+						res = v.newInt(l.Value + r.Value)
 					case token.Sub:
-						res = NewInt(l.Value - r.Value)
+						res = v.newInt(l.Value - r.Value)
 					case token.Mul:
-						res = NewInt(l.Value * r.Value)
+						res = v.newInt(l.Value * r.Value)
 					case token.Quo:
 						if r.Value != 0 {
-							res = NewInt(l.Value / r.Value)
+							res = v.newInt(l.Value / r.Value)
 						}
 					case token.Rem:
 						if r.Value != 0 {
-							res = NewInt(l.Value % r.Value)
+							res = v.newInt(l.Value % r.Value)
 						}
 					case token.Less:
 						cmp = 0
@@ -185,13 +222,13 @@ func (v *VM) run() {
 				if r, ok := right.(*Float); ok {
 					switch tok {
 					case token.Add:
-						res = &Float{Value: l.Value + r.Value}
+						res = v.newFloat(l.Value + r.Value)
 					case token.Sub:
-						res = &Float{Value: l.Value - r.Value}
+						res = v.newFloat(l.Value - r.Value)
 					case token.Mul:
-						res = &Float{Value: l.Value * r.Value}
+						res = v.newFloat(l.Value * r.Value)
 					case token.Quo:
-						res = &Float{Value: l.Value / r.Value}
+						res = v.newFloat(l.Value / r.Value)
 					case token.Less:
 						cmp = 0
 						if l.Value < r.Value {
@@ -318,7 +355,7 @@ func (v *VM) run() {
 
 			switch x := operand.(type) {
 			case *Int:
-				var res Object = NewInt(^x.Value)
+				var res Object = v.newInt(^x.Value)
 				allocs--
 				if allocs == 0 {
 					v.err = ErrObjectAllocLimit
@@ -337,7 +374,7 @@ func (v *VM) run() {
 
 			switch x := operand.(type) {
 			case *Int:
-				var res Object = NewInt(-x.Value)
+				var res Object = v.newInt(-x.Value)
 				allocs--
 				if allocs == 0 {
 					v.err = ErrObjectAllocLimit
@@ -346,7 +383,7 @@ func (v *VM) run() {
 				stack[sp] = res
 				sp++
 			case *Float:
-				var res Object = &Float{Value: -x.Value}
+				var res Object = v.newFloat(-x.Value)
 				allocs--
 				if allocs == 0 {
 					v.err = ErrObjectAllocLimit
