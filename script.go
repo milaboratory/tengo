@@ -204,13 +204,34 @@ type Compiled struct {
 	fullClone     bool
 }
 
+// vmPool recycles VMs between runs. A VM is ~80KB of zeroed stack and frame
+// space, which would otherwise be allocated and garbage collected per Run.
+var vmPool = sync.Pool{
+	New: func() interface{} { return new(VM) },
+}
+
+// acquireVM returns a pooled VM initialized for this compiled script.
+func (c *Compiled) acquireVM() *VM {
+	v := vmPool.Get().(*VM)
+	v.init(c.bytecode, c.globals, c.maxAllocs)
+	return v
+}
+
+// releaseVM clears the VM's references to script objects and pools it.
+func releaseVM(v *VM) {
+	v.release()
+	vmPool.Put(v)
+}
+
 // Run executes the compiled script in the virtual machine.
 func (c *Compiled) Run() error {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	v := NewVM(c.bytecode, c.globals, c.maxAllocs)
-	return v.Run()
+	v := c.acquireVM()
+	err := v.Run()
+	releaseVM(v)
+	return err
 }
 
 // RunContext is like Run but includes a context.
@@ -218,7 +239,7 @@ func (c *Compiled) RunContext(ctx context.Context) (err error) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 
-	v := NewVM(c.bytecode, c.globals, c.maxAllocs)
+	v := c.acquireVM()
 	ch := make(chan error, 1)
 	go func() {
 		defer func() {
@@ -243,6 +264,8 @@ func (c *Compiled) RunContext(ctx context.Context) (err error) {
 		err = ctx.Err()
 	case err = <-ch:
 	}
+	// the goroutine has finished with v either way
+	releaseVM(v)
 	return
 }
 

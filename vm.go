@@ -25,6 +25,7 @@ type VM struct {
 	fileSet     *parser.SourceFileSet
 	frames      [MaxFrames]frame
 	framesIndex int
+	framesHigh  int // highest framesIndex reached; frames below it hold references
 	curFrame    *frame
 	curInsts    []byte
 	ip          int
@@ -78,23 +79,48 @@ func NewVM(
 	globals []Object,
 	maxAllocs int64,
 ) *VM {
+	v := new(VM)
+	v.init(bytecode, globals, maxAllocs)
+	return v
+}
+
+// init prepares v (new or recycled) to execute bytecode.
+func (v *VM) init(bytecode *Bytecode, globals []Object, maxAllocs int64) {
 	if globals == nil {
 		globals = make([]Object, GlobalsSize)
 	}
-	v := &VM{
-		constants:   bytecode.Constants,
-		sp:          0,
-		globals:     globals,
-		fileSet:     bytecode.FileSet,
-		framesIndex: 1,
-		ip:          -1,
-		maxAllocs:   maxAllocs,
-	}
+	v.constants = bytecode.Constants
+	v.sp = 0
+	v.globals = globals
+	v.fileSet = bytecode.FileSet
+	v.framesIndex = 1
+	v.framesHigh = 1
+	v.ip = -1
+	v.maxAllocs = maxAllocs
 	v.frames[0].fn = bytecode.MainFunction
 	v.frames[0].ip = -1
 	v.curFrame = &v.frames[0]
 	v.curInsts = v.curFrame.fn.Instructions
-	return v
+}
+
+// release drops every reference the VM holds to script objects so a pooled
+// VM does not keep the last run's garbage alive.
+func (v *VM) release() {
+	v.stack = [StackSize]Object{}
+	high := v.framesHigh
+	if high > MaxFrames {
+		high = MaxFrames
+	}
+	for i := 0; i < high; i++ {
+		v.frames[i] = frame{}
+	}
+	v.constants = nil
+	v.globals = nil
+	v.fileSet = nil
+	v.curFrame = nil
+	v.curInsts = nil
+	v.modules = nil
+	v.err = nil
 }
 
 // Abort aborts the execution.
@@ -723,6 +749,9 @@ func (v *VM) run() {
 				insts = callee.Instructions
 				ip = -1
 				framesIndex++
+				if framesIndex > v.framesHigh {
+					v.framesHigh = framesIndex
+				}
 				sp = sp - numArgs + callee.NumLocals
 			} else {
 				var ret Object
