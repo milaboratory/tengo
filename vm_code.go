@@ -34,17 +34,17 @@ type instr struct {
 // Operand kinds, stored in the top byte of an operand. The low 24 bits hold
 // the index.
 const (
-	kTemp      = iota // operand stack slot, frame-relative (never *ObjectPtr)
-	kLocal            // local variable slot, frame-relative; read derefs *ObjectPtr, write stores plainly
-	kLocalSet         // local as destination with OpSetLocal semantics: write through *ObjectPtr
-	kConst            // constants[idx]
-	kGlobal           // globals[idx]
-	kFree             // *freeVars[idx].Value
-	kFreePtr          // freeVars[idx] itself (source only)
-	kBuiltin          // builtinFuncs[idx] (source only)
-	kUndefined        // literal (source only)
-	kTrue
-	kFalse
+	kindTemp      = iota // operand stack slot, frame-relative (never *ObjectPtr)
+	kindLocal            // local variable slot, frame-relative; read derefs *ObjectPtr, write stores plainly
+	kindLocalSet         // local as destination with OpSetLocal semantics: write through *ObjectPtr
+	kindConst            // constants[idx]
+	kindGlobal           // globals[idx]
+	kindFree             // *freeVars[idx].Value
+	kindFreePtr          // freeVars[idx] itself (source only)
+	kindBuiltin          // builtinFuncs[idx] (source only)
+	kindUndefined        // literal (source only)
+	kindTrue
+	kindFalse
 )
 
 const operandMask = 1<<24 - 1
@@ -56,7 +56,7 @@ func operand(kind int, idx int) int32 {
 	return int32(kind<<24 | (idx & operandMask))
 }
 
-func isTemp(o int32) bool { return o>>24 == kTemp }
+func isTemp(o int32) bool { return o>>24 == kindTemp }
 
 // Translated opcodes.
 const (
@@ -116,21 +116,21 @@ func specialize(in *instr) {
 	ka, ia := int(in.a>>24), in.a&operandMask
 	kb, ib := int(in.b>>24), in.b&operandMask
 	switch {
-	case ka == kTemp && kb == kConst:
+	case ka == kindTemp && kb == kindConst:
 		in.op, in.a, in.b = opLoadConst, ia, ib
-	case ka == kTemp && kb == kGlobal:
+	case ka == kindTemp && kb == kindGlobal:
 		in.op, in.a, in.b = opLoadGlobal, ia, ib
-	case ka == kTemp && kb == kLocal:
+	case ka == kindTemp && kb == kindLocal:
 		in.op, in.a, in.b = opLoadLocal, ia, ib
-	case ka == kTemp && kb == kFree:
+	case ka == kindTemp && kb == kindFree:
 		in.op, in.a, in.b = opLoadFree, ia, ib
-	case kb == kTemp && ka == kGlobal:
+	case kb == kindTemp && ka == kindGlobal:
 		in.op, in.a, in.b = opStoreGlobal, ia, ib
-	case kb == kTemp && ka == kLocal:
+	case kb == kindTemp && ka == kindLocal:
 		in.op, in.a, in.b = opStoreLocal, ia, ib
-	case kb == kTemp && ka == kLocalSet:
+	case kb == kindTemp && ka == kindLocalSet:
 		in.op, in.a, in.b = opStoreLocalSet, ia, ib
-	case kb == kTemp && ka == kFree:
+	case kb == kindTemp && ka == kindFree:
 		in.op, in.a, in.b = opStoreFree, ia, ib
 	}
 }
@@ -212,7 +212,7 @@ func (tr *translator) translate(insts []byte, numLocals int) []instr {
 	code := tr.code[:0]
 	byteIdx := growInt32(tr.byteIdx, len(insts)+1)
 	tr.byteIdx = byteIdx
-	t := func(d int) int32 { return operand(kTemp, numLocals+d) }
+	t := func(d int) int32 { return operand(kindTemp, numLocals+d) }
 	tr.depthAt = growInt32(tr.depthAt, len(insts)+1)
 	scanDepth(insts, tr.depthAt, func(ip int, op byte, operands []int, depth int) {
 		byteIdx[ip] = int32(len(code))
@@ -223,31 +223,31 @@ func (tr *translator) translate(insts []byte, numLocals int) []instr {
 		in := instr{pos: int32(ip)}
 		switch op {
 		case parser.OpConstant:
-			in.op, in.a, in.b = opMove, t(depth), operand(kConst, operands[0])
+			in.op, in.a, in.b = opMove, t(depth), operand(kindConst, operands[0])
 		case parser.OpNull:
-			in.op, in.a, in.b = opMove, t(depth), operand(kUndefined, 0)
+			in.op, in.a, in.b = opMove, t(depth), operand(kindUndefined, 0)
 		case parser.OpTrue:
-			in.op, in.a, in.b = opMove, t(depth), operand(kTrue, 0)
+			in.op, in.a, in.b = opMove, t(depth), operand(kindTrue, 0)
 		case parser.OpFalse:
-			in.op, in.a, in.b = opMove, t(depth), operand(kFalse, 0)
+			in.op, in.a, in.b = opMove, t(depth), operand(kindFalse, 0)
 		case parser.OpGetGlobal:
-			in.op, in.a, in.b = opMove, t(depth), operand(kGlobal, operands[0])
+			in.op, in.a, in.b = opMove, t(depth), operand(kindGlobal, operands[0])
 		case parser.OpSetGlobal:
-			in.op, in.a, in.b = opMove, operand(kGlobal, operands[0]), t(depth-1)
+			in.op, in.a, in.b = opMove, operand(kindGlobal, operands[0]), t(depth-1)
 		case parser.OpGetLocal:
-			in.op, in.a, in.b = opMove, t(depth), operand(kLocal, operands[0])
+			in.op, in.a, in.b = opMove, t(depth), operand(kindLocal, operands[0])
 		case parser.OpDefineLocal:
-			in.op, in.a, in.b = opMove, operand(kLocal, operands[0]), t(depth-1)
+			in.op, in.a, in.b = opMove, operand(kindLocal, operands[0]), t(depth-1)
 		case parser.OpSetLocal:
-			in.op, in.a, in.b = opMove, operand(kLocalSet, operands[0]), t(depth-1)
+			in.op, in.a, in.b = opMove, operand(kindLocalSet, operands[0]), t(depth-1)
 		case parser.OpGetFree:
-			in.op, in.a, in.b = opMove, t(depth), operand(kFree, operands[0])
+			in.op, in.a, in.b = opMove, t(depth), operand(kindFree, operands[0])
 		case parser.OpSetFree:
-			in.op, in.a, in.b = opMove, operand(kFree, operands[0]), t(depth-1)
+			in.op, in.a, in.b = opMove, operand(kindFree, operands[0]), t(depth-1)
 		case parser.OpGetFreePtr:
-			in.op, in.a, in.b = opMove, t(depth), operand(kFreePtr, operands[0])
+			in.op, in.a, in.b = opMove, t(depth), operand(kindFreePtr, operands[0])
 		case parser.OpGetBuiltin:
-			in.op, in.a, in.b = opMove, t(depth), operand(kBuiltin, operands[0])
+			in.op, in.a, in.b = opMove, t(depth), operand(kindBuiltin, operands[0])
 		case parser.OpGetLocalPtr:
 			in.op, in.a, in.b = opGetLocalPtr, t(depth), int32(operands[0])
 		case parser.OpBinaryOp:

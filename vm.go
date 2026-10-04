@@ -181,11 +181,11 @@ func codePos(fn *CompiledFunction, ip int) int {
 func (v *VM) load(o int32, bp int, fr *frame) Object {
 	idx := int(o & operandMask)
 	switch o >> 24 {
-	case kTemp:
+	case kindTemp:
 		return v.stack[bp+idx]
-	case kConst:
+	case kindConst:
 		return v.constants[idx]
-	case kGlobal:
+	case kindGlobal:
 		return v.globals[idx]
 	}
 	return v.loadSlow(o, bp, fr)
@@ -194,21 +194,21 @@ func (v *VM) load(o int32, bp int, fr *frame) Object {
 func (v *VM) loadSlow(o int32, bp int, fr *frame) Object {
 	idx := int(o & operandMask)
 	switch o >> 24 {
-	case kLocal:
+	case kindLocal:
 		val := v.stack[bp+idx]
 		if p, ok := val.(*ObjectPtr); ok {
 			return *p.Value
 		}
 		return val
-	case kFree:
+	case kindFree:
 		return *fr.freeVars[idx].Value
-	case kFreePtr:
+	case kindFreePtr:
 		return fr.freeVars[idx]
-	case kBuiltin:
+	case kindBuiltin:
 		return builtinFuncs[idx]
-	case kTrue:
+	case kindTrue:
 		return TrueValue
-	case kFalse:
+	case kindFalse:
 		return FalseValue
 	}
 	return UndefinedValue
@@ -218,9 +218,9 @@ func (v *VM) loadSlow(o int32, bp int, fr *frame) Object {
 func (v *VM) store(o int32, bp int, fr *frame, val Object) {
 	idx := int(o & operandMask)
 	switch o >> 24 {
-	case kTemp, kLocal:
+	case kindTemp, kindLocal:
 		v.stack[bp+idx] = val
-	case kGlobal:
+	case kindGlobal:
 		v.globals[idx] = val
 	default:
 		v.storeSlow(o, bp, fr, val)
@@ -230,7 +230,7 @@ func (v *VM) store(o int32, bp int, fr *frame, val Object) {
 func (v *VM) storeSlow(o int32, bp int, fr *frame, val Object) {
 	idx := int(o & operandMask)
 	switch o >> 24 {
-	case kLocalSet:
+	case kindLocalSet:
 		// update the pointee instead of replacing the pointer: free
 		// variables may reference this local
 		lp := bp + idx
@@ -239,7 +239,7 @@ func (v *VM) storeSlow(o int32, bp int, fr *frame, val Object) {
 			val = p
 		}
 		v.stack[lp] = val
-	case kFree:
+	case kindFree:
 		*fr.freeVars[idx].Value = val
 	}
 }
@@ -299,13 +299,13 @@ func (v *VM) run() {
 			*curFrame.freeVars[in.a].Value = stack[bp+int(in.b)]
 		case opMove:
 			var val Object
-			if k, idx := in.b>>24, int(in.b&operandMask); k == kTemp {
+			if k, idx := in.b>>24, int(in.b&operandMask); k == kindTemp {
 				val = stack[bp+idx]
-			} else if k == kConst {
+			} else if k == kindConst {
 				val = constants[idx]
-			} else if k == kGlobal {
+			} else if k == kindGlobal {
 				val = globals[idx]
-			} else if k == kLocal {
+			} else if k == kindLocal {
 				val = stack[bp+idx]
 				if p, ok := val.(*ObjectPtr); ok {
 					val = *p.Value
@@ -313,22 +313,22 @@ func (v *VM) run() {
 			} else {
 				val = v.loadSlow(in.b, bp, curFrame)
 			}
-			if k, idx := in.a>>24, int(in.a&operandMask); k == kTemp || k == kLocal {
+			if k, idx := in.a>>24, int(in.a&operandMask); k == kindTemp || k == kindLocal {
 				stack[bp+idx] = val
-			} else if k == kGlobal {
+			} else if k == kindGlobal {
 				globals[idx] = val
 			} else {
 				v.storeSlow(in.a, bp, curFrame, val)
 			}
 		case opBinary, opBinaryJF:
 			var left Object
-			if k, idx := in.b>>24, int(in.b&operandMask); k == kTemp {
+			if k, idx := in.b>>24, int(in.b&operandMask); k == kindTemp {
 				left = stack[bp+idx]
-			} else if k == kConst {
+			} else if k == kindConst {
 				left = constants[idx]
-			} else if k == kGlobal {
+			} else if k == kindGlobal {
 				left = globals[idx]
-			} else if k == kLocal {
+			} else if k == kindLocal {
 				left = stack[bp+idx]
 				if p, ok := left.(*ObjectPtr); ok {
 					left = *p.Value
@@ -337,13 +337,13 @@ func (v *VM) run() {
 				left = v.loadSlow(in.b, bp, curFrame)
 			}
 			var right Object
-			if k, idx := in.c>>24, int(in.c&operandMask); k == kTemp {
+			if k, idx := in.c>>24, int(in.c&operandMask); k == kindTemp {
 				right = stack[bp+idx]
-			} else if k == kConst {
+			} else if k == kindConst {
 				right = constants[idx]
-			} else if k == kGlobal {
+			} else if k == kindGlobal {
 				right = globals[idx]
-			} else if k == kLocal {
+			} else if k == kindLocal {
 				right = stack[bp+idx]
 				if p, ok := right.(*ObjectPtr); ok {
 					right = *p.Value
@@ -474,22 +474,22 @@ func (v *VM) run() {
 					continue
 				}
 			}
-			if k, idx := in.a>>24, int(in.a&operandMask); k == kTemp || k == kLocal {
+			if k, idx := in.a>>24, int(in.a&operandMask); k == kindTemp || k == kindLocal {
 				stack[bp+idx] = res
-			} else if k == kGlobal {
+			} else if k == kindGlobal {
 				globals[idx] = res
 			} else {
 				v.storeSlow(in.a, bp, curFrame, res)
 			}
 		case opEqual, opNotEqual, opEqualJF, opNotEqualJF:
 			var left Object
-			if k, idx := in.b>>24, int(in.b&operandMask); k == kTemp {
+			if k, idx := in.b>>24, int(in.b&operandMask); k == kindTemp {
 				left = stack[bp+idx]
-			} else if k == kConst {
+			} else if k == kindConst {
 				left = constants[idx]
-			} else if k == kGlobal {
+			} else if k == kindGlobal {
 				left = globals[idx]
-			} else if k == kLocal {
+			} else if k == kindLocal {
 				left = stack[bp+idx]
 				if p, ok := left.(*ObjectPtr); ok {
 					left = *p.Value
@@ -498,13 +498,13 @@ func (v *VM) run() {
 				left = v.loadSlow(in.b, bp, curFrame)
 			}
 			var right Object
-			if k, idx := in.c>>24, int(in.c&operandMask); k == kTemp {
+			if k, idx := in.c>>24, int(in.c&operandMask); k == kindTemp {
 				right = stack[bp+idx]
-			} else if k == kConst {
+			} else if k == kindConst {
 				right = constants[idx]
-			} else if k == kGlobal {
+			} else if k == kindGlobal {
 				right = globals[idx]
-			} else if k == kLocal {
+			} else if k == kindLocal {
 				right = stack[bp+idx]
 				if p, ok := right.(*ObjectPtr); ok {
 					right = *p.Value
@@ -526,9 +526,9 @@ func (v *VM) run() {
 				if eq == (in.op == opEqual) {
 					res = TrueValue
 				}
-				if k, idx := in.a>>24, int(in.a&operandMask); k == kTemp || k == kLocal {
+				if k, idx := in.a>>24, int(in.a&operandMask); k == kindTemp || k == kindLocal {
 					stack[bp+idx] = res
-				} else if k == kGlobal {
+				} else if k == kindGlobal {
 					globals[idx] = res
 				} else {
 					v.storeSlow(in.a, bp, curFrame, res)
@@ -585,13 +585,13 @@ func (v *VM) run() {
 			v.store(in.a, bp, curFrame, res)
 		case opJumpFalsy:
 			var cond Object
-			if k, idx := in.b>>24, int(in.b&operandMask); k == kTemp {
+			if k, idx := in.b>>24, int(in.b&operandMask); k == kindTemp {
 				cond = stack[bp+idx]
-			} else if k == kConst {
+			} else if k == kindConst {
 				cond = constants[idx]
-			} else if k == kGlobal {
+			} else if k == kindGlobal {
 				cond = globals[idx]
-			} else if k == kLocal {
+			} else if k == kindLocal {
 				cond = stack[bp+idx]
 				if p, ok := cond.(*ObjectPtr); ok {
 					cond = *p.Value
@@ -702,13 +702,13 @@ func (v *VM) run() {
 			}
 		case opIndex:
 			var left Object
-			if k, idx := in.b>>24, int(in.b&operandMask); k == kTemp {
+			if k, idx := in.b>>24, int(in.b&operandMask); k == kindTemp {
 				left = stack[bp+idx]
-			} else if k == kConst {
+			} else if k == kindConst {
 				left = constants[idx]
-			} else if k == kGlobal {
+			} else if k == kindGlobal {
 				left = globals[idx]
-			} else if k == kLocal {
+			} else if k == kindLocal {
 				left = stack[bp+idx]
 				if p, ok := left.(*ObjectPtr); ok {
 					left = *p.Value
@@ -717,13 +717,13 @@ func (v *VM) run() {
 				left = v.loadSlow(in.b, bp, curFrame)
 			}
 			var index Object
-			if k, idx := in.c>>24, int(in.c&operandMask); k == kTemp {
+			if k, idx := in.c>>24, int(in.c&operandMask); k == kindTemp {
 				index = stack[bp+idx]
-			} else if k == kConst {
+			} else if k == kindConst {
 				index = constants[idx]
-			} else if k == kGlobal {
+			} else if k == kindGlobal {
 				index = globals[idx]
-			} else if k == kLocal {
+			} else if k == kindLocal {
 				index = stack[bp+idx]
 				if p, ok := index.(*ObjectPtr); ok {
 					index = *p.Value
@@ -748,9 +748,9 @@ func (v *VM) run() {
 			if val == nil {
 				val = UndefinedValue
 			}
-			if k, idx := in.a>>24, int(in.a&operandMask); k == kTemp || k == kLocal {
+			if k, idx := in.a>>24, int(in.a&operandMask); k == kindTemp || k == kindLocal {
 				stack[bp+idx] = val
-			} else if k == kGlobal {
+			} else if k == kindGlobal {
 				globals[idx] = val
 			} else {
 				v.storeSlow(in.a, bp, curFrame, val)
@@ -995,13 +995,13 @@ func (v *VM) run() {
 			var retVal Object = UndefinedValue
 			if in.op == opReturn && !curFrame.discard {
 				var val Object
-				if k, idx := in.b>>24, int(in.b&operandMask); k == kTemp {
+				if k, idx := in.b>>24, int(in.b&operandMask); k == kindTemp {
 					val = stack[bp+idx]
-				} else if k == kConst {
+				} else if k == kindConst {
 					val = constants[idx]
-				} else if k == kGlobal {
+				} else if k == kindGlobal {
 					val = globals[idx]
-				} else if k == kLocal {
+				} else if k == kindLocal {
 					val = stack[bp+idx]
 					if p, ok := val.(*ObjectPtr); ok {
 						val = *p.Value
