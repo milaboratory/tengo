@@ -140,7 +140,11 @@ func (v *VM) Run() (err error) {
 	v.modules = nil
 	v.err = nil
 
-	v.run()
+	if v.curFrame.fn.stackDepth > StackSize {
+		v.err = ErrStackOverflow
+	} else {
+		v.run()
+	}
 	atomic.StoreInt64(&v.aborting, 0)
 	err = v.err
 	if err != nil {
@@ -681,6 +685,10 @@ func (v *VM) run() {
 					v.err = fmt.Errorf("not an array: %s", arr.TypeName())
 					goto done
 				}
+				if sp+len(items) > StackSize {
+					v.err = ErrStackOverflow
+					goto done
+				}
 				copy(stack[sp:], items)
 				sp += len(items)
 				numArgs += len(items) - 1
@@ -735,7 +743,8 @@ func (v *VM) run() {
 						continue
 					}
 				}
-				if framesIndex >= MaxFrames {
+				if framesIndex >= MaxFrames ||
+					sp-numArgs+callee.NumLocals+callee.stackDepth > StackSize {
 					v.err = ErrStackOverflow
 					goto done
 				}
@@ -912,6 +921,7 @@ func (v *VM) run() {
 				NumParameters: fn.NumParameters,
 				VarArgs:       fn.VarArgs,
 				SourceMap:     fn.SourceMap,
+				stackDepth:    fn.stackDepth,
 				Free:          free,
 			}
 			allocs--

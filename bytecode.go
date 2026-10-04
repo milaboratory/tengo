@@ -230,6 +230,9 @@ func fixDecodedObject(
 		return TrueValue, nil
 	case *Undefined:
 		return UndefinedValue, nil
+	case *CompiledFunction:
+		// not serialized; recompute so the VM can bound the operand stack
+		o.stackDepth = maxStackDepth(o.Instructions)
 	case *Array:
 		for i, v := range o.Value {
 			fv, err := fixDecodedObject(v, modules)

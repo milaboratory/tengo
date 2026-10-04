@@ -3386,6 +3386,23 @@ out = x.at([1, 2, 3], 0)
 func TestVMStackOverflow(t *testing.T) {
 	expectError(t, `f := func() { return f() + 1 }; f()`,
 		nil, "stack overflow")
+
+	// frames with many locals and temporaries exhaust the operand stack
+	// long before MaxFrames; this must be an error, not a panic
+	expectError(t, `
+f := func(n) {
+	a := 1; b := 2; c := 3; d := 4
+	if n == 0 { return 0 }
+	return f(n-1) + a + b + c + d
+}
+f(2000)`, nil, "stack overflow")
+
+	// a spread call expands at run time and can overflow on its own
+	expectError(t, `
+arr := []
+for i := 0; i < 3000; i++ { arr = append(arr, i) }
+f := func(...x) { return len(x) }
+f(arr...)`, nil, "stack overflow")
 }
 
 func TestString(t *testing.T) {

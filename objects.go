@@ -582,6 +582,9 @@ type CompiledFunction struct {
 	// IsModule marks the main function of an imported source module; the VM
 	// evaluates it at most once per run and reuses the exported value.
 	IsModule bool
+	// stackDepth is the operand stack space the body needs above its locals,
+	// see maxStackDepth. The VM uses it to reject calls that would overflow.
+	stackDepth int
 }
 
 // TypeName returns the name of the type.
@@ -607,6 +610,8 @@ func (o *CompiledFunction) Copy() Object {
 		NumParameters: o.NumParameters,
 		IsModule:      o.IsModule,
 		VarArgs:       o.VarArgs,
+		SourceMap:     o.SourceMap,
+		stackDepth:    o.stackDepth,
 		Free:          append([]*ObjectPtr{}, o.Free...), // DO NOT Copy() of elements; these are variable pointers
 	}
 }
