@@ -136,16 +136,121 @@ func (v *VM) run() {
 			right := stack[sp-1]
 			left := stack[sp-2]
 			tok := token.Token(insts[ip])
-			res, e := left.BinaryOp(tok, right)
-			if e != nil {
-				sp -= 2
-				if e == ErrInvalidOperator {
-					v.err = fmt.Errorf("invalid operation: %s %s %s",
-						left.TypeName(), tok.String(), right.TypeName())
+
+			// fast paths for int op int and float op float, which is most
+			// of what loops do; anything else goes through BinaryOp
+			var res Object
+			cmp := -1 // -1: not a fast-path comparison, else 0/1 = false/true
+			switch l := left.(type) {
+			case *Int:
+				if r, ok := right.(*Int); ok {
+					switch tok {
+					case token.Add:
+						res = NewInt(l.Value + r.Value)
+					case token.Sub:
+						res = NewInt(l.Value - r.Value)
+					case token.Mul:
+						res = NewInt(l.Value * r.Value)
+					case token.Quo:
+						if r.Value != 0 {
+							res = NewInt(l.Value / r.Value)
+						}
+					case token.Rem:
+						if r.Value != 0 {
+							res = NewInt(l.Value % r.Value)
+						}
+					case token.Less:
+						cmp = 0
+						if l.Value < r.Value {
+							cmp = 1
+						}
+					case token.Greater:
+						cmp = 0
+						if l.Value > r.Value {
+							cmp = 1
+						}
+					case token.LessEq:
+						cmp = 0
+						if l.Value <= r.Value {
+							cmp = 1
+						}
+					case token.GreaterEq:
+						cmp = 0
+						if l.Value >= r.Value {
+							cmp = 1
+						}
+					}
+				}
+			case *Float:
+				if r, ok := right.(*Float); ok {
+					switch tok {
+					case token.Add:
+						res = &Float{Value: l.Value + r.Value}
+					case token.Sub:
+						res = &Float{Value: l.Value - r.Value}
+					case token.Mul:
+						res = &Float{Value: l.Value * r.Value}
+					case token.Quo:
+						res = &Float{Value: l.Value / r.Value}
+					case token.Less:
+						cmp = 0
+						if l.Value < r.Value {
+							cmp = 1
+						}
+					case token.Greater:
+						cmp = 0
+						if l.Value > r.Value {
+							cmp = 1
+						}
+					case token.LessEq:
+						cmp = 0
+						if l.Value <= r.Value {
+							cmp = 1
+						}
+					case token.GreaterEq:
+						cmp = 0
+						if l.Value >= r.Value {
+							cmp = 1
+						}
+					}
+				}
+			}
+			if cmp >= 0 {
+				// a comparison feeding a conditional jump does not need to
+				// materialize the bool on the stack
+				if ip+1 < len(insts) && insts[ip+1] == parser.OpJumpFalsy {
+					sp -= 2
+					ip += 5
+					allocs--
+					if allocs == 0 {
+						v.err = ErrObjectAllocLimit
+						goto done
+					}
+					if cmp == 0 {
+						pos := int(insts[ip]) | int(insts[ip-1])<<8 | int(insts[ip-2])<<16 | int(insts[ip-3])<<24
+						ip = pos - 1
+					}
+					continue
+				}
+				if cmp == 1 {
+					res = TrueValue
+				} else {
+					res = FalseValue
+				}
+			}
+			if res == nil {
+				var e error
+				res, e = left.BinaryOp(tok, right)
+				if e != nil {
+					sp -= 2
+					if e == ErrInvalidOperator {
+						v.err = fmt.Errorf("invalid operation: %s %s %s",
+							left.TypeName(), tok.String(), right.TypeName())
+						goto done
+					}
+					v.err = e
 					goto done
 				}
-				v.err = e
-				goto done
 			}
 
 			allocs--
@@ -160,7 +265,15 @@ func (v *VM) run() {
 			right := stack[sp-1]
 			left := stack[sp-2]
 			sp -= 2
-			if left.Equals(right) {
+			var eq bool
+			if l, ok := left.(*Int); ok {
+				if r, ok := right.(*Int); ok {
+					eq = l.Value == r.Value
+				}
+			} else {
+				eq = left.Equals(right)
+			}
+			if eq {
 				stack[sp] = TrueValue
 			} else {
 				stack[sp] = FalseValue
@@ -170,7 +283,15 @@ func (v *VM) run() {
 			right := stack[sp-1]
 			left := stack[sp-2]
 			sp -= 2
-			if left.Equals(right) {
+			var eq bool
+			if l, ok := left.(*Int); ok {
+				if r, ok := right.(*Int); ok {
+					eq = l.Value == r.Value
+				}
+			} else {
+				eq = left.Equals(right)
+			}
+			if eq {
 				stack[sp] = FalseValue
 			} else {
 				stack[sp] = TrueValue
@@ -186,7 +307,7 @@ func (v *VM) run() {
 			sp++
 		case parser.OpLNot:
 			operand := stack[sp-1]
-			if operand.IsFalsy() {
+			if isFalsy(operand) {
 				stack[sp-1] = TrueValue
 			} else {
 				stack[sp-1] = FalseValue
@@ -241,13 +362,13 @@ func (v *VM) run() {
 		case parser.OpJumpFalsy:
 			ip += 4
 			sp--
-			if stack[sp].IsFalsy() {
+			if isFalsy(stack[sp]) {
 				pos := int(insts[ip]) | int(insts[ip-1])<<8 | int(insts[ip-2])<<16 | int(insts[ip-3])<<24
 				ip = pos - 1
 			}
 		case parser.OpAndJump:
 			ip += 4
-			if stack[sp-1].IsFalsy() {
+			if isFalsy(stack[sp-1]) {
 				pos := int(insts[ip]) | int(insts[ip-1])<<8 | int(insts[ip-2])<<16 | int(insts[ip-3])<<24
 				ip = pos - 1
 			} else {
@@ -255,7 +376,7 @@ func (v *VM) run() {
 			}
 		case parser.OpOrJump:
 			ip += 4
-			if stack[sp-1].IsFalsy() {
+			if isFalsy(stack[sp-1]) {
 				sp--
 			} else {
 				pos := int(insts[ip]) | int(insts[ip-1])<<8 | int(insts[ip-2])<<16 | int(insts[ip-3])<<24
@@ -831,6 +952,15 @@ done:
 	v.curFrame = curFrame
 	v.framesIndex = framesIndex
 	v.allocs = allocs
+}
+
+// isFalsy reports whether o is falsy, short-circuiting the two shared Bool
+// values so the common case needs no dynamic dispatch.
+func isFalsy(o Object) bool {
+	if b, ok := o.(*Bool); ok {
+		return !b.value
+	}
+	return o.IsFalsy()
 }
 
 // IsStackEmpty tests if the stack is empty or not.
