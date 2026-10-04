@@ -585,6 +585,9 @@ type CompiledFunction struct {
 	// stackDepth is the operand stack space the body needs above its locals,
 	// see maxStackDepth. The VM uses it to reject calls that would overflow.
 	stackDepth int
+	// code is the register-form translation of Instructions that the VM
+	// executes, built by codeFor. It is shared between copies and closures.
+	code []instr
 }
 
 // TypeName returns the name of the type.
@@ -612,6 +615,7 @@ func (o *CompiledFunction) Copy() Object {
 		VarArgs:       o.VarArgs,
 		SourceMap:     o.SourceMap,
 		stackDepth:    o.stackDepth,
+		code:          o.code,
 		Free:          append([]*ObjectPtr{}, o.Free...), // DO NOT Copy() of elements; these are variable pointers
 	}
 }

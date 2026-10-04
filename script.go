@@ -125,6 +125,7 @@ func (s *Script) Compile() (*Compiled, error) {
 	// remove duplicates from constants
 	bytecode := c.Bytecode()
 	bytecode.RemoveDuplicates()
+	bytecode.prepare()
 
 	// check the constant objects limit
 	if s.maxConstObjects >= 0 {
