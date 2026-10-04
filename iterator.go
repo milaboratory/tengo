@@ -111,9 +111,20 @@ func (i *BytesIterator) Value() Object {
 type MapIterator struct {
 	ObjectImpl
 	v map[string]Object
-	k []string
+	// k holds the key objects for the whole iteration in one allocation;
+	// Key hands out pointers into it instead of allocating per step
+	k []String
 	i int
 	l int
+}
+
+// newMapIterator snapshots the keys of m.
+func newMapIterator(m map[string]Object) *MapIterator {
+	keys := make([]String, 0, len(m))
+	for k := range m {
+		keys = append(keys, String{Value: k})
+	}
+	return &MapIterator{v: m, k: keys, l: len(keys)}
 }
 
 // TypeName returns the name of the type.
@@ -149,14 +160,12 @@ func (i *MapIterator) Next() bool {
 
 // Key returns the key or index value of the current element.
 func (i *MapIterator) Key() Object {
-	k := i.k[i.i-1]
-	return &String{Value: k}
+	return &i.k[i.i-1]
 }
 
 // Value returns the value of the current element.
 func (i *MapIterator) Value() Object {
-	k := i.k[i.i-1]
-	return i.v[k]
+	return i.v[i.k[i.i-1].Value]
 }
 
 // StringIterator represents an iterator for a string.

@@ -1014,15 +1014,7 @@ func (o *ImmutableMap) Equals(x Object) bool {
 
 // Iterate creates an immutable map iterator.
 func (o *ImmutableMap) Iterate() Iterator {
-	keys := make([]string, 0, len(o.Value))
-	for k := range o.Value {
-		keys = append(keys, k)
-	}
-	return &MapIterator{
-		v: o.Value,
-		k: keys,
-		l: len(keys),
-	}
+	return newMapIterator(o.Value)
 }
 
 // CanIterate returns whether the Object can be Iterated.
@@ -1302,15 +1294,7 @@ func (o *Map) IndexSet(index, value Object) (err error) {
 
 // Iterate creates a map iterator.
 func (o *Map) Iterate() Iterator {
-	keys := make([]string, 0, len(o.Value))
-	for k := range o.Value {
-		keys = append(keys, k)
-	}
-	return &MapIterator{
-		v: o.Value,
-		k: keys,
-		l: len(keys),
-	}
+	return newMapIterator(o.Value)
 }
 
 // CanIterate returns whether the Object can be Iterated.
