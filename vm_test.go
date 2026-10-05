@@ -3383,9 +3383,77 @@ out = x.at([1, 2, 3], 0)
 `, Opts().Stdlib(), 1)
 }
 
+func TestIntDivisionByZero(t *testing.T) {
+	// a Go integer division by zero would panic the host process
+	expectError(t, `x := 0; y := 1 / x`, nil, "integer division by zero")
+	expectError(t, `x := 0; y := 1 % x`, nil, "integer division by zero")
+	expectError(t, `f := func(a, b) { return a % b }; y := f(7, 0)`,
+		nil, "integer division by zero")
+	expectRun(t, `x := 0; out = 1.0 / x`, nil, math.Inf(1))
+	expectRun(t, `out = 7 / 2`, nil, 3)
+	expectRun(t, `out = 7 % 2`, nil, 1)
+}
+
+func TestTailCallDiscardedResult(t *testing.T) {
+	// a call whose result is dropped before an implicit return is still a
+	// tail call, but the function must return undefined, not the callee's
+	// value
+	expectRun(t, `
+f := func(n) {
+	if n == 0 { return 42 }
+	f(n-1)
+}
+out = f(3)`, nil, tengo.UndefinedValue)
+	expectRun(t, `
+f := func(n) {
+	if n == 0 { return 42 }
+	f(n-1)
+	return
+}
+out = f(3)`, nil, tengo.UndefinedValue)
+	// mixed: a value-returning tail call after a dropped one
+	expectRun(t, `
+f := func(n) {
+	if n == 0 { return 42 }
+	if n == 2 { f(n-1); return }
+	return f(n-1)
+}
+out = f(3)`, nil, tengo.UndefinedValue)
+	expectRun(t, `
+f := func(n) {
+	if n == 0 { return 42 }
+	return f(n-1)
+}
+out = f(3)`, nil, 42)
+	// deep enough that it must still be a tail call
+	expectRun(t, `
+f := func(n) {
+	if n == 0 { return 42 }
+	f(n-1)
+}
+out = f(5000)`, nil, tengo.UndefinedValue)
+}
+
 func TestVMStackOverflow(t *testing.T) {
 	expectError(t, `f := func() { return f() + 1 }; f()`,
 		nil, "stack overflow")
+
+	// frames with many locals and temporaries exhaust the operand stack
+	// long before MaxFrames; this must be an error, not a panic
+	expectError(t, `
+f := func(n) {
+	a := 1; b := 2; c := 3; d := 4
+	if n == 0 { return 0 }
+	return f(n-1) + a + b + c + d
+}
+f(2000)`, nil, "stack overflow")
+
+	// a spread call expands at run time and can overflow on its own
+	expectError(t, `
+arr := []
+for i := 0; i < 3000; i++ { arr = append(arr, i) }
+f := func(...x) { return len(x) }
+f(arr...)`, nil, "stack overflow")
 }
 
 func TestString(t *testing.T) {

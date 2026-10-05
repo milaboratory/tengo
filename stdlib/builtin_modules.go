@@ -16,3 +16,15 @@ var BuiltinModules = map[string]map[string]tengo.Object{
 	"base64": base64Module,
 	"hex":    hexModule,
 }
+
+func init() {
+	// none of the module functions keep a reference to their args slice, so
+	// the VM may pass them a window of its operand stack
+	for _, mod := range BuiltinModules {
+		for _, obj := range mod {
+			if fn, ok := obj.(*tengo.UserFunction); ok {
+				fn.StackArgs = true
+			}
+		}
+	}
+}

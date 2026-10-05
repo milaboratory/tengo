@@ -52,6 +52,9 @@ var (
 
 	// ErrInvalidRangeStep is an error where the step parameter is less than or equal to 0 when using builtin range function.
 	ErrInvalidRangeStep = errors.New("range step must be greater than 0")
+
+	// ErrDivisionByZero represents an integer division or remainder by zero.
+	ErrDivisionByZero = errors.New("integer division by zero")
 )
 
 // ErrInvalidArgumentType represents an invalid argument value type error.

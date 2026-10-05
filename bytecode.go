@@ -14,6 +14,7 @@ type Bytecode struct {
 	FileSet      *parser.SourceFileSet
 	MainFunction *CompiledFunction
 	Constants    []Object
+	prepared     bool // functions translated for the VM, see prepare
 }
 
 // Size of the bytecode in bytes
@@ -32,7 +33,28 @@ func (b *Bytecode) Clone() *Bytecode {
 		FileSet:      b.FileSet,
 		MainFunction: b.MainFunction,
 		Constants:    append([]Object{}, b.Constants...),
+		prepared:     b.prepared,
 	}
+}
+
+// prepare translates every function into the form the VM executes (see
+// vm_code.go). Script.Compile and Decode call it once; VM.init calls it for
+// bytecode assembled by hand, where the first run pays for the translation.
+func (b *Bytecode) prepare() {
+	if b.prepared {
+		return
+	}
+	var tr translator
+	if b.MainFunction.code == nil {
+		b.MainFunction.code = tr.translate(b.MainFunction.Instructions,
+			b.MainFunction.NumLocals)
+	}
+	for _, c := range b.Constants {
+		if fn, ok := c.(*CompiledFunction); ok && fn.code == nil {
+			fn.code = tr.translate(fn.Instructions, fn.NumLocals)
+		}
+	}
+	b.prepared = true
 }
 
 // Encode writes Bytecode data to the writer.
@@ -122,6 +144,12 @@ func (b *Bytecode) Decode(r io.Reader, modules *ModuleMap) error {
 		}
 		b.Constants[i] = fv
 	}
+	// the main function is not in Constants; it needs the same repair
+	if _, err := fixDecodedObject(b.MainFunction, modules); err != nil {
+		return err
+	}
+	b.prepared = false // an earlier Decode may have prepared this Bytecode
+	b.prepare()
 	return nil
 }
 
@@ -209,13 +237,16 @@ func (b *Bytecode) RemoveDuplicates() {
 	// update CONST instructions with new indexes
 	// main function
 	updateConstIndexes(b.MainFunction.Instructions, indexMap)
+	b.MainFunction.code = nil
 	// other compiled functions in constants
 	for _, c := range b.Constants {
 		switch c := c.(type) {
 		case *CompiledFunction:
 			updateConstIndexes(c.Instructions, indexMap)
+			c.code = nil // instructions changed; retranslate on prepare
 		}
 	}
+	b.prepared = false
 }
 
 func fixDecodedObject(
@@ -230,6 +261,10 @@ func fixDecodedObject(
 		return TrueValue, nil
 	case *Undefined:
 		return UndefinedValue, nil
+	case *CompiledFunction:
+		// not serialized; recompute so the VM can bound the operand stack
+		o.stackDepth = maxStackDepth(o.Instructions)
+		o.code = nil
 	case *Array:
 		for i, v := range o.Value {
 			fv, err := fixDecodedObject(v, modules)
