@@ -144,7 +144,11 @@ func (b *Bytecode) Decode(r io.Reader, modules *ModuleMap) error {
 		}
 		b.Constants[i] = fv
 	}
-	b.MainFunction.code = nil
+	// the main function is not in Constants; it needs the same repair
+	if _, err := fixDecodedObject(b.MainFunction, modules); err != nil {
+		return err
+	}
+	b.prepared = false // an earlier Decode may have prepared this Bytecode
 	b.prepare()
 	return nil
 }
