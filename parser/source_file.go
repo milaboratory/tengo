@@ -112,7 +112,9 @@ func (s *SourceFileSet) Position(p Pos) (pos SourceFilePos) {
 }
 
 func (s *SourceFileSet) file(p Pos) *SourceFile {
-	// common case: p is in last file
+	// common case: p is in the file added last. Lookups only read the hint:
+	// a file set is shared by every clone of a compiled script, and two of
+	// them can resolve error positions at the same time.
 	f := s.LastFile
 	if f != nil && f.Base <= int(p) && int(p) <= f.Base+f.Size {
 		return f
@@ -124,7 +126,6 @@ func (s *SourceFileSet) file(p Pos) *SourceFile {
 
 		// f.base <= int(p) by definition of searchFiles
 		if int(p) <= f.Base+f.Size {
-			s.LastFile = f // race is ok - s.last is only a cache
 			return f
 		}
 	}
