@@ -160,11 +160,11 @@ func (o *Array) TypeName() string {
 }
 
 func (o *Array) String() string {
-	var elements []string
+	elements := make([]string, 0, len(o.Value))
 	for _, e := range o.Value {
 		elements = append(elements, e.String())
 	}
-	return fmt.Sprintf("[%s]", strings.Join(elements, ", "))
+	return "[" + strings.Join(elements, ", ") + "]"
 }
 
 // BinaryOp returns another object that is the result of a given binary
@@ -184,9 +184,9 @@ func (o *Array) BinaryOp(op token.Token, rhs Object) (Object, error) {
 
 // Copy returns a copy of the type.
 func (o *Array) Copy() Object {
-	var c []Object
-	for _, elem := range o.Value {
-		c = append(c, elem.Copy())
+	c := make([]Object, len(o.Value))
+	for i, elem := range o.Value {
+		c[i] = elem.Copy()
 	}
 	return &Array{Value: c}
 }
@@ -440,7 +440,7 @@ func (o *Bytes) IndexGet(index Object) (res Object, err error) {
 		res = UndefinedValue
 		return
 	}
-	res = &Int{Value: int64(o.Value[idxVal])}
+	res = NewInt(int64(o.Value[idxVal]))
 	return
 }
 
@@ -582,6 +582,12 @@ type CompiledFunction struct {
 	// IsModule marks the main function of an imported source module; the VM
 	// evaluates it at most once per run and reuses the exported value.
 	IsModule bool
+	// stackDepth is the operand stack space the body needs above its locals,
+	// see maxStackDepth. The VM uses it to reject calls that would overflow.
+	stackDepth int
+	// code is the register-form translation of Instructions that the VM
+	// executes, built by codeFor. It is shared between copies and closures.
+	code []instr
 }
 
 // TypeName returns the name of the type.
@@ -607,6 +613,9 @@ func (o *CompiledFunction) Copy() Object {
 		NumParameters: o.NumParameters,
 		IsModule:      o.IsModule,
 		VarArgs:       o.VarArgs,
+		SourceMap:     o.SourceMap,
+		stackDepth:    o.stackDepth,
+		code:          o.code,
 		Free:          append([]*ObjectPtr{}, o.Free...), // DO NOT Copy() of elements; these are variable pointers
 	}
 }
@@ -851,11 +860,11 @@ func (o *ImmutableArray) TypeName() string {
 }
 
 func (o *ImmutableArray) String() string {
-	var elements []string
+	elements := make([]string, 0, len(o.Value))
 	for _, e := range o.Value {
 		elements = append(elements, e.String())
 	}
-	return fmt.Sprintf("[%s]", strings.Join(elements, ", "))
+	return "[" + strings.Join(elements, ", ") + "]"
 }
 
 // BinaryOp returns another object that is the result of a given binary
@@ -872,9 +881,9 @@ func (o *ImmutableArray) BinaryOp(op token.Token, rhs Object) (Object, error) {
 
 // Copy returns a copy of the type.
 func (o *ImmutableArray) Copy() Object {
-	var c []Object
-	for _, elem := range o.Value {
-		c = append(c, elem.Copy())
+	c := make([]Object, len(o.Value))
+	for i, elem := range o.Value {
+		c[i] = elem.Copy()
 	}
 	return &Array{Value: c}
 }
@@ -957,7 +966,7 @@ func (o *ImmutableMap) String() string {
 
 // Copy returns a copy of the type.
 func (o *ImmutableMap) Copy() Object {
-	c := make(map[string]Object)
+	c := make(map[string]Object, len(o.Value))
 	for k, v := range o.Value {
 		c[k] = v.Copy()
 	}
@@ -1009,15 +1018,7 @@ func (o *ImmutableMap) Equals(x Object) bool {
 
 // Iterate creates an immutable map iterator.
 func (o *ImmutableMap) Iterate() Iterator {
-	keys := make([]string, 0, len(o.Value))
-	for k := range o.Value {
-		keys = append(keys, k)
-	}
-	return &MapIterator{
-		v: o.Value,
-		k: keys,
-		l: len(keys),
-	}
+	return newMapIterator(o.Value)
 }
 
 // CanIterate returns whether the Object can be Iterated.
@@ -1081,9 +1082,15 @@ func (o *Int) BinaryOp(op token.Token, rhs Object) (Object, error) {
 			r := o.Value * rhs.Value
 			return NewInt(r), nil
 		case token.Quo:
+			if rhs.Value == 0 {
+				return nil, ErrDivisionByZero
+			}
 			r := o.Value / rhs.Value
 			return NewInt(r), nil
 		case token.Rem:
+			if rhs.Value == 0 {
+				return nil, ErrDivisionByZero
+			}
 			r := o.Value % rhs.Value
 			return NewInt(r), nil
 		case token.And:
@@ -1228,7 +1235,7 @@ func (o *Map) String() string {
 
 // Copy returns a copy of the type.
 func (o *Map) Copy() Object {
-	c := make(map[string]Object)
+	c := make(map[string]Object, len(o.Value))
 	for k, v := range o.Value {
 		c[k] = v.Copy()
 	}
@@ -1291,15 +1298,7 @@ func (o *Map) IndexSet(index, value Object) (err error) {
 
 // Iterate creates a map iterator.
 func (o *Map) Iterate() Iterator {
-	keys := make([]string, 0, len(o.Value))
-	for k := range o.Value {
-		keys = append(keys, k)
-	}
-	return &MapIterator{
-		v: o.Value,
-		k: keys,
-		l: len(keys),
-	}
+	return newMapIterator(o.Value)
 }
 
 // CanIterate returns whether the Object can be Iterated.
@@ -1498,7 +1497,7 @@ func (o *Time) BinaryOp(op token.Token, rhs Object) (Object, error) {
 	case *Time:
 		switch op {
 		case token.Sub: // time - time => int (duration)
-			return &Int{Value: int64(o.Value.Sub(rhs.Value))}, nil
+			return NewInt(int64(o.Value.Sub(rhs.Value))), nil
 		case token.Less: // time < time => bool
 			if o.Value.Before(rhs.Value) {
 				return TrueValue, nil
@@ -1609,6 +1608,11 @@ type UserFunction struct {
 	ObjectImpl
 	Name  string
 	Value CallableFunc
+	// StackArgs declares that Value never keeps a reference to its args
+	// slice after returning. The VM then passes a window of its operand
+	// stack instead of a copy of the arguments. Leave it false for functions
+	// that store args or return closures over it.
+	StackArgs bool
 }
 
 // TypeName returns the name of the type.
@@ -1622,7 +1626,7 @@ func (o *UserFunction) String() string {
 
 // Copy returns a copy of the type.
 func (o *UserFunction) Copy() Object {
-	return &UserFunction{Value: o.Value, Name: o.Name}
+	return &UserFunction{Value: o.Value, Name: o.Name, StackArgs: o.StackArgs}
 }
 
 // Equals returns true if the value of the type is equal to the value of

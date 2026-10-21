@@ -2,6 +2,7 @@ package tengo_test
 
 import (
 	"bytes"
+	"strings"
 	"testing"
 	"time"
 
@@ -295,4 +296,51 @@ func testBytecodeSerialization(t *testing.T, b *tengo.Bytecode) {
 	require.Equal(t, b.FileSet, r.FileSet)
 	require.Equal(t, b.MainFunction, r.MainFunction)
 	require.Equal(t, b.Constants, r.Constants)
+}
+
+func TestBytecodeDecodeTwice(t *testing.T) {
+	// decoding into a Bytecode that an earlier Decode already prepared must
+	// translate the newly decoded functions too
+	first := compileForDecode(t, `f := func() { return 1 }; out = f()`)
+	second := compileForDecode(t, `g := func(x) { return x * 2 }; out = g(21)`)
+	var b tengo.Bytecode
+	decodeRoundTrip(t, first, &b)
+	decodeRoundTrip(t, second, &b)
+
+	globals := make([]tengo.Object, tengo.GlobalsSize)
+	require.NoError(t, tengo.NewVM(&b, globals, -1).Run())
+	require.Equal(t, &tengo.Int{Value: 42}, globals[0])
+}
+
+func TestBytecodeDecodeMainStackDepth(t *testing.T) {
+	// the main function's stack bound is not serialized; a decoded main that
+	// needs more operand slots than the VM has must fail with a stack
+	// overflow error instead of running past the end of the stack
+	src := "out = [" + strings.Repeat("1, ", tengo.StackSize) + "1]"
+	var b tengo.Bytecode
+	decodeRoundTrip(t, compileForDecode(t, src), &b)
+
+	globals := make([]tengo.Object, tengo.GlobalsSize)
+	err := tengo.NewVM(&b, globals, -1).Run()
+	require.Error(t, err)
+	require.True(t, strings.Contains(err.Error(), "stack overflow"), err.Error())
+}
+
+func compileForDecode(t *testing.T, src string) *tengo.Bytecode {
+	fileSet := parser.NewFileSet()
+	file := fileSet.AddFile("test", -1, len(src))
+	parsed, err := parser.NewParser(file, []byte(src), nil).ParseFile()
+	require.NoError(t, err)
+
+	symTable := tengo.NewSymbolTable()
+	symTable.Define("out")
+	c := tengo.NewCompiler(file, symTable, nil, nil, nil)
+	require.NoError(t, c.Compile(parsed))
+	return c.Bytecode()
+}
+
+func decodeRoundTrip(t *testing.T, b *tengo.Bytecode, into *tengo.Bytecode) {
+	var buf bytes.Buffer
+	require.NoError(t, b.Encode(&buf))
+	require.NoError(t, into.Decode(&buf, nil))
 }

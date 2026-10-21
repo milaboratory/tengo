@@ -494,6 +494,7 @@ func (c *Compiler) Compile(node parser.Node) error {
 			NumParameters: len(node.Type.Params.List),
 			VarArgs:       node.Type.Params.VarArgs,
 			SourceMap:     sourceMap,
+			stackDepth:    maxStackDepth(instructions),
 		}
 		if len(freeSymbols) > 0 {
 			c.emit(node, parser.OpClosure,
@@ -638,6 +639,7 @@ func (c *Compiler) Bytecode() *Bytecode {
 		MainFunction: &CompiledFunction{
 			Instructions: append(c.currentInstructions(), parser.OpSuspend),
 			SourceMap:    c.currentSourceMap(),
+			stackDepth:   maxStackDepth(c.currentInstructions()),
 		},
 		Constants: c.constants,
 	}

@@ -113,6 +113,9 @@ for k := 0; k < 4000; k++ {
 	for key, v in m { c += v }
 }
 out := c`,
+	"ShortScript": `
+cfg := {name: "job", retries: 3, tags: ["a", "b"]}
+out := cfg.name + ":" + string(cfg.retries + len(cfg.tags))`,
 	"StdlibCalls": `
 text := import("text")
 math := import("math")
@@ -126,7 +129,7 @@ out := c`,
 func BenchmarkVM(b *testing.B) {
 	for _, name := range []string{"ArithLoop", "FloatLoop", "CompareLoop", "Fib",
 		"ClosureCalls", "MapAccess", "MethodCalls", "ArrayIter", "ArrayIndex",
-		"StringOps", "Builtins", "StdlibCalls", "MapIter"} {
+		"StringOps", "Builtins", "StdlibCalls", "MapIter", "ShortScript"} {
 		src := vmBenchScripts[name]
 		b.Run(name, func(b *testing.B) {
 			s := tengo.NewScript([]byte(src))
