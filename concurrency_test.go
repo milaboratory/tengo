@@ -14,9 +14,9 @@ import (
 	"github.com/d5/tengo/v2/stdlib"
 )
 
-// These tests mirror how an embedding backend uses a cached compiled
-// template: compile once, then per render Clone, swap builtin modules,
-// run under a context, and read globals. Run them with -race.
+// These tests exercise the shared-script pattern: compile a script once,
+// keep the Compiled, and for every execution Clone it, swap builtin modules,
+// run it under a context and read its globals. Run them with -race.
 
 // counterModule keeps state at module level and hands out closures over it;
 // a run must see a fresh instance and never another run's state.
@@ -28,30 +28,30 @@ export {
 }
 `
 
-// sharedTemplate is the cached script. It imports a source module, a stdlib
-// module and the builtin module "rt" that each render replaces.
-const sharedTemplate = `
+// sharedScript is the script compiled once. It imports a source module, a
+// stdlib module and the builtin module "host" that each execution replaces.
+const sharedScript = `
 m := import("counter")
 text := import("text")
-rt := import("rt")
+host := import("host")
 
 for i := 0; i < 50; i++ { m.inc() }
 keys := []
 for i := 0; i < 20; i++ { keys = append(keys, text.join(["k", string(i)], "")) }
 tbl := {}
-for k in keys { tbl[k] = len(k) + rt.id() }
+for k in keys { tbl[k] = len(k) + host.id() }
 sum := 0
 for k, v in tbl { sum += tbl[k] }
-rt.emit(sum)
-out = m.get() * 1000 + rt.id()
+host.emit(sum)
+out = m.get() * 1000 + host.id()
 `
 
-type runtimeSink struct {
+type hostModule struct {
 	id   int
 	seen []int64
 }
 
-func (s *runtimeSink) module() map[string]tengo.Object {
+func (s *hostModule) module() map[string]tengo.Object {
 	return map[string]tengo.Object{
 		"id": &tengo.UserFunction{Name: "id", Value: func(args ...tengo.Object) (tengo.Object, error) {
 			return &tengo.Int{Value: int64(s.id)}, nil
@@ -64,10 +64,10 @@ func (s *runtimeSink) module() map[string]tengo.Object {
 	}
 }
 
-func compileSharedTemplate(t *testing.T, src string) *tengo.Compiled {
+func compileShared(t *testing.T, src string) *tengo.Compiled {
 	mods := stdlib.GetModuleMap("text", "fmt", "json").Copy()
 	mods.AddSourceModule("counter", []byte(counterModule))
-	mods.AddBuiltinModule("rt", (&runtimeSink{}).module())
+	mods.AddBuiltinModule("host", (&hostModule{}).module())
 
 	scr := tengo.NewScript([]byte(src))
 	scr.SetImports(mods)
@@ -77,11 +77,11 @@ func compileSharedTemplate(t *testing.T, src string) *tengo.Compiled {
 	return compiled
 }
 
-// renderClone does what one render does with the cached template.
-func renderClone(ctx context.Context, cached *tengo.Compiled, sink *runtimeSink) (*tengo.Compiled, error) {
-	c := cached.Clone()
-	c.ReplaceBuiltinModule("rt", sink.module())
-	c.ReplaceBuiltinModule("__missing__", map[string]tengo.Object{}) // the backend swaps several
+// runClone does what one execution does with the shared Compiled.
+func runClone(ctx context.Context, shared *tengo.Compiled, sink *hostModule) (*tengo.Compiled, error) {
+	c := shared.Clone()
+	c.ReplaceBuiltinModule("host", sink.module())
+	c.ReplaceBuiltinModule("__missing__", map[string]tengo.Object{}) // callers often swap several
 	return c, c.RunContext(ctx)
 }
 
@@ -93,8 +93,8 @@ func expectedSum(id int) int64 {
 	return sum
 }
 
-func TestConcurrentRendersOfCachedTemplate(t *testing.T) {
-	cached := compileSharedTemplate(t, sharedTemplate)
+func TestConcurrentClonesOfSharedScript(t *testing.T) {
+	shared := compileShared(t, sharedScript)
 
 	const workers, rounds = 32, 8
 	var wg sync.WaitGroup
@@ -104,32 +104,32 @@ func TestConcurrentRendersOfCachedTemplate(t *testing.T) {
 			defer wg.Done()
 			for r := 0; r < rounds; r++ {
 				id := w*rounds + r + 1
-				sink := &runtimeSink{id: id}
-				c, err := renderClone(context.Background(), cached, sink)
+				sink := &hostModule{id: id}
+				c, err := runClone(context.Background(), shared, sink)
 				require.NoError(t, err)
 				// module state is per run: 50 increments regardless of what
-				// other renders did
+				// other executions did
 				require.Equal(t, int64(50*1000+id), c.Get("out").Int64())
 				require.Equal(t, 1, len(sink.seen))
 				require.Equal(t, expectedSum(id), sink.seen[0])
 			}
 		}(w)
 	}
-	// the cache weighs and clones the original while renders are running
+	// the owner sizes and clones the original while clones are running
 	for i := 0; i < 50; i++ {
-		_ = cached.Size()
-		_ = cached.Clone()
+		_ = shared.Size()
+		_ = shared.Clone()
 	}
 	wg.Wait()
 
 	// the original was never run and still has its initial globals
-	require.Equal(t, int64(0), cached.Get("out").Int64())
+	require.Equal(t, int64(0), shared.Get("out").Int64())
 }
 
-func TestConcurrentRendersSeeFreshModuleState(t *testing.T) {
-	// the same source module is imported by every render; a pooled VM must
+func TestConcurrentClonesSeeFreshModuleState(t *testing.T) {
+	// the same source module is imported by every clone; a pooled VM must
 	// not carry one run's memoized module exports into the next run
-	cached := compileSharedTemplate(t, `m := import("counter"); out = m.inc()`)
+	shared := compileShared(t, `m := import("counter"); out = m.inc()`)
 
 	run := func(c *tengo.Compiled) {
 		require.NoError(t, c.Run())
@@ -137,10 +137,10 @@ func TestConcurrentRendersSeeFreshModuleState(t *testing.T) {
 	}
 	// sequential runs reuse pooled VMs
 	for i := 0; i < 20; i++ {
-		run(cached.Clone())
+		run(shared.Clone())
 	}
 	// a clone run twice gets a fresh module instance both times
-	c := cached.Clone()
+	c := shared.Clone()
 	run(c)
 	run(c)
 
@@ -149,15 +149,15 @@ func TestConcurrentRendersSeeFreshModuleState(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			run(cached.Clone())
+			run(shared.Clone())
 		}()
 	}
 	wg.Wait()
 }
 
-func TestConcurrentRendersWithTimeout(t *testing.T) {
-	cached := compileSharedTemplate(t, sharedTemplate)
-	spinner := compileSharedTemplate(t, `for { out += 1 }`)
+func TestConcurrentClonesWithTimeout(t *testing.T) {
+	shared := compileShared(t, sharedScript)
+	spinner := compileShared(t, `for { out += 1 }`)
 
 	var wg sync.WaitGroup
 	var timeouts int64
@@ -180,8 +180,8 @@ func TestConcurrentRendersWithTimeout(t *testing.T) {
 			defer wg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			sink := &runtimeSink{id: id}
-			c, err := renderClone(ctx, cached, sink)
+			sink := &hostModule{id: id}
+			c, err := runClone(ctx, shared, sink)
 			require.NoError(t, err)
 			require.Equal(t, int64(50*1000+id), c.Get("out").Int64())
 		}(w + 1)
@@ -189,11 +189,11 @@ func TestConcurrentRendersWithTimeout(t *testing.T) {
 	wg.Wait()
 	require.Equal(t, int64(16), atomic.LoadInt64(&timeouts))
 
-	// VMs that were aborted go back to the pool; later renders must not
+	// VMs that were aborted go back to the pool; later runs must not
 	// inherit the abort
 	for i := 0; i < 32; i++ {
-		sink := &runtimeSink{id: 7}
-		c, err := renderClone(context.Background(), cached, sink)
+		sink := &hostModule{id: 7}
+		c, err := runClone(context.Background(), shared, sink)
 		require.NoError(t, err)
 		require.Equal(t, int64(50*1000+7), c.Get("out").Int64())
 	}
@@ -201,12 +201,12 @@ func TestConcurrentRendersWithTimeout(t *testing.T) {
 
 var errExitScript = errors.New("script exit")
 
-func TestConcurrentRendersUserFunctionErrorsAndPanics(t *testing.T) {
-	cached := compileSharedTemplate(t, `
-rt := import("rt")
+func TestConcurrentClonesUserFunctionErrorsAndPanics(t *testing.T) {
+	shared := compileShared(t, `
+host := import("host")
 m := import("counter")
 m.inc()
-rt.fail()
+host.fail()
 out = 99
 `)
 	failing := func(mode int) map[string]tengo.Object {
@@ -214,7 +214,7 @@ out = 99
 			"fail": &tengo.UserFunction{Name: "fail", Value: func(args ...tengo.Object) (tengo.Object, error) {
 				switch mode {
 				case 1:
-					return nil, errExitScript // the backend's .exit() path
+					return nil, errExitScript // a host function stopping the script early
 				case 2:
 					panic("user function panicked")
 				}
@@ -228,8 +228,8 @@ out = 99
 		wg.Add(1)
 		go func(mode int) {
 			defer wg.Done()
-			c := cached.Clone()
-			c.ReplaceBuiltinModule("rt", failing(mode))
+			c := shared.Clone()
+			c.ReplaceBuiltinModule("host", failing(mode))
 			err := c.RunContext(context.Background())
 			switch mode {
 			case 0:
@@ -248,28 +248,27 @@ out = 99
 
 	// pooled VMs that saw an error or a recovered panic run cleanly again
 	for i := 0; i < 32; i++ {
-		c := cached.Clone()
-		c.ReplaceBuiltinModule("rt", failing(0))
+		c := shared.Clone()
+		c.ReplaceBuiltinModule("host", failing(0))
 		require.NoError(t, c.Run())
 		require.Equal(t, int64(99), c.Get("out").Int64())
 	}
 }
 
 func TestRunOriginalWhileCloning(t *testing.T) {
-	// on a cache fault the backend runs the freshly compiled script itself
-	// and caches it; later renders clone it while it may still be running,
-	// and the owner may keep swapping its modules between runs
-	cached := compileSharedTemplate(t, sharedTemplate)
+	// the owner runs the original itself while other goroutines clone it,
+	// and keeps swapping its modules between runs
+	shared := compileShared(t, sharedScript)
 
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		for i := 0; i < 8; i++ {
-			sink := &runtimeSink{id: 1}
-			cached.ReplaceBuiltinModule("rt", sink.module())
-			require.NoError(t, cached.RunContext(context.Background()))
-			require.Equal(t, int64(50*1000+1), cached.Get("out").Int64())
+			sink := &hostModule{id: 1}
+			shared.ReplaceBuiltinModule("host", sink.module())
+			require.NoError(t, shared.RunContext(context.Background()))
+			require.Equal(t, int64(50*1000+1), shared.Get("out").Int64())
 		}
 	}()
 	for w := 0; w < 16; w++ {
@@ -277,8 +276,8 @@ func TestRunOriginalWhileCloning(t *testing.T) {
 		go func(id int) {
 			defer wg.Done()
 			for i := 0; i < 4; i++ {
-				sink := &runtimeSink{id: id}
-				c, err := renderClone(context.Background(), cached, sink)
+				sink := &hostModule{id: id}
+				c, err := runClone(context.Background(), shared, sink)
 				require.NoError(t, err)
 				require.Equal(t, int64(50*1000+id), c.Get("out").Int64())
 			}
@@ -287,9 +286,9 @@ func TestRunOriginalWhileCloning(t *testing.T) {
 	wg.Wait()
 }
 
-func TestConcurrentCompileOfDifferentTemplates(t *testing.T) {
-	// distinct templates compile in parallel on cache misses; they share the
-	// stdlib module map, the builtin table and the compiler's shared state
+func TestConcurrentCompileOfDifferentScripts(t *testing.T) {
+	// distinct scripts compile in parallel; they share the stdlib module
+	// map, the builtin table and the compiler's shared state
 	var wg sync.WaitGroup
 	for w := 0; w < 32; w++ {
 		wg.Add(1)
@@ -297,14 +296,14 @@ func TestConcurrentCompileOfDifferentTemplates(t *testing.T) {
 			defer wg.Done()
 			src := fmt.Sprintf(`
 m := import("counter")
-rt := import("rt")
+host := import("host")
 f := func(x) { return x * %d }
 for i := 0; i < %d; i++ { m.inc() }
-out = f(m.get()) + rt.id()
+out = f(m.get()) + host.id()
 `, id+1, id+1)
-			c := compileSharedTemplate(t, src)
-			sink := &runtimeSink{id: id}
-			c, err := renderClone(context.Background(), c, sink)
+			c := compileShared(t, src)
+			sink := &hostModule{id: id}
+			c, err := runClone(context.Background(), c, sink)
 			require.NoError(t, err)
 			require.Equal(t, int64((id+1)*(id+1)+id), c.Get("out").Int64())
 		}(w)
