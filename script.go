@@ -280,17 +280,20 @@ func (c *Compiled) Size() int64 {
 }
 
 // Clone creates a new copy of Compiled. Cloned copies are safe for concurrent
-// use by multiple goroutines.
+// use by multiple goroutines, including with the original.
 func (c *Compiled) Clone() *Compiled {
-	c.lock.RLock()
-	defer c.lock.RUnlock()
+	c.lock.Lock()
+	defer c.lock.Unlock()
 
+	// the original shares its bytecode with the clone from now on, so it
+	// must copy before it mutates, like the clone does
+	c.fullClone = false
 	clone := &Compiled{
 		globalIndexes: c.globalIndexes,
 		bytecode:      c.bytecode,
 		globals:       make([]Object, len(c.globals)),
 		maxAllocs:     c.maxAllocs,
-		fullClone:     false, // this clone shares bytecode and global indexes with the 'original'
+		fullClone:     false,
 	}
 	// copy global objects
 	for idx, g := range c.globals {
@@ -403,6 +406,5 @@ func (c *Compiled) prepareForModulesUpdate() {
 	}
 	c.globalIndexes = indexes
 	c.bytecode = c.bytecode.Clone()
-
-	c.fullClone = true
+	c.fullClone = true // owned now; later updates need no copy until the next Clone
 }
